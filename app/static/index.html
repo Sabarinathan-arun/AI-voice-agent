@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Sales Caller</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main>
+  <h1>AI Sales Caller</h1>
+  <p class="muted">Upload your leads, describe your offer, and an AI voice agent calls every lead for you. No account needed.</p>
+
+  <ol class="steps">
+    <li><b>1. Pay</b>One campaign, one payment</li>
+    <li><b>2. Set up</b>Business, product &amp; sales script</li>
+    <li><b>3. Upload</b>Excel with names &amp; phones</li>
+    <li><b>4. AI calls</b>Every lead is called</li>
+    <li><b>5. Results</b>Status, outcome, summary</li>
+    <li><b>6. Export</b>Download as Excel</li>
+  </ol>
+
+  <div class="card">
+    <h2>Start a campaign</h2>
+    <div class="price" id="price">…</div>
+    <p class="muted" id="terms"></p>
+    <div class="row">
+      <button id="pay">Pay &amp; start</button>
+    </div>
+    <div class="msg" id="msg"></div>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+(async () => {
+  const cfg = await (await fetch('/api/config')).json();
+  $('price').textContent = new Intl.NumberFormat(undefined, {style: 'currency', currency: cfg.price_currency.toUpperCase()})
+    .format(cfg.price_amount / 100);
+  $('terms').textContent = `Up to ${cfg.max_leads} leads per campaign. All campaign data is deleted automatically ${cfg.retention_hours} hours after payment — download your results before then.`
+    + (cfg.payment_provider === 'mock' ? ' (Test mode: no real payment is taken.)' : '');
+  if (new URLSearchParams(location.search).get('cancelled')) {
+    $('msg').textContent = 'Payment was cancelled.'; $('msg').className = 'msg error';
+  }
+})();
+$('pay').onclick = async () => {
+  $('pay').disabled = true;
+  const res = await fetch('/api/campaigns', {method: 'POST'});
+  const data = await res.json();
+  if (!res.ok) { $('msg').textContent = data.detail || 'Could not start payment.'; $('msg').className = 'msg error'; $('pay').disabled = false; return; }
+  try { localStorage.setItem('lastCampaign', data.campaign_id); } catch (e) {}
+  location.href = data.checkout_url;
+};
+</script>
+</body>
+</html>
