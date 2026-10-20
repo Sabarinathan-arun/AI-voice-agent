@@ -35,7 +35,7 @@ class Settings:
     bolna_api_key: str
     bolna_api_base: str
     bolna_from_number: str
-    bolna_agent_id: str
+    bolna_agent_template: str
 
     max_leads_per_campaign: int
     max_concurrent_calls: int
@@ -46,6 +46,9 @@ class Settings:
 
 def load_settings() -> Settings:
     _load_dotenv(ROOT / ".env")
+    template = os.environ.get("BOLNA_AGENT_TEMPLATE", "app/bolna_agent_template.json")
+    if not os.path.isabs(template):
+        template = str(ROOT / template)
     return Settings(
         app_base_url=os.environ.get("APP_BASE_URL", "http://localhost:8000").rstrip("/"),
         razorpay_key_id=os.environ.get("RAZORPAY_KEY_ID", ""),
@@ -56,7 +59,7 @@ def load_settings() -> Settings:
         bolna_api_key=os.environ.get("BOLNA_API_KEY", ""),
         bolna_api_base=os.environ.get("BOLNA_API_BASE", "https://api.bolna.ai").rstrip("/"),
         bolna_from_number=os.environ.get("BOLNA_FROM_NUMBER", ""),
-        bolna_agent_id=os.environ.get("BOLNA_AGENT_ID", ""),
+        bolna_agent_template=template,
         max_leads_per_campaign=_int("MAX_LEADS_PER_CAMPAIGN", 500),
         max_concurrent_calls=_int("MAX_CONCURRENT_CALLS", 3),
         default_country_code=os.environ.get("DEFAULT_COUNTRY_CODE", "91").lstrip("+"),

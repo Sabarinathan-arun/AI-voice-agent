@@ -11,9 +11,9 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from .bolna import make_bolna_client
+from .bolna import LANGUAGES, BolnaError, make_bolna_client
 from .config import Settings, load_settings
 from .export import build_results_workbook
 from .leads import LeadFileError, parse_leads
@@ -21,6 +21,7 @@ from .payments import PaymentError, make_payment_provider
 from .store import Store, iso, utcnow
 from .worker import CampaignWorker
 
+log = logging.getLogger(__name__)
 STATIC = Path(__file__).parent / "static"
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 
@@ -32,6 +33,13 @@ class SetupIn(BaseModel):
     sales_instructions: str = Field(min_length=1, max_length=5000)
     welcome_message: str = Field(default="", max_length=500)
     language: str = Field(default="English", max_length=50)
+
+    @field_validator("language")
+    @classmethod
+    def known_language(cls, value: str) -> str:
+        if value not in LANGUAGES:
+            raise ValueError(f"Choose one of: {', '.join(LANGUAGES)}")
+        return value
 
 
 def create_app(settings: Settings | None = None, bolna=None, payments=None, run_worker: bool = True) -> FastAPI:
@@ -71,7 +79,7 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, run_
             key = lead["outcome"] or lead["status"]
             counts[key] = counts.get(key, 0) + 1
         done = sum(1 for l in leads if l["outcome"] or l["status"] == "skipped")
-        public = {k: v for k, v in campaign.items() if k not in ("payment_ref", "last_activity")}
+        public = {k: v for k, v in campaign.items() if k not in ("payment_ref", "bolna_agent_id", "last_activity")}
         return {
             "campaign": public,
             "stats": {"total": len(leads), "done": done, "by_outcome": counts},
@@ -100,6 +108,7 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, run_
             "price_amount": settings.price_amount,
             "price_currency": settings.price_currency,
             "max_leads": settings.max_leads_per_campaign,
+            "languages": list(LANGUAGES),
         }
 
     # --- 1. payment --------------------------------------------------------------
@@ -168,7 +177,15 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, run_
             raise HTTPException(422, "Complete the sales setup first.")
         if not store.get_leads(campaign_id):
             raise HTTPException(422, "Upload leads first.")
-        store.update_campaign(campaign_id, status="running", started_at=iso(utcnow()))
+        webhook_url = f"{settings.app_base_url}/api/webhooks/bolna"
+        if not settings.app_base_url.startswith("https://"):
+            webhook_url = None  # Bolna cannot reach a local URL; results are polled instead
+        try:
+            agent_id = bolna.create_agent(campaign, webhook_url)
+        except (BolnaError, OSError, ValueError) as exc:
+            log.exception("agent creation failed")
+            raise HTTPException(502, f"Could not create the voice agent: {exc}")
+        store.update_campaign(campaign_id, bolna_agent_id=agent_id, status="running", started_at=iso(utcnow()))
         return serialize(store.get_campaign(campaign_id))
 
     @app.post("/api/campaigns/{campaign_id}/stop")

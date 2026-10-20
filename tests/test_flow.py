@@ -8,7 +8,8 @@ from app.store import utcnow
 from app.worker import parse_execution
 
 SETUP = {"business_name": "Acme Solar", "product_details": "Rooftop solar, 3kW from 1.5L",
-         "sales_instructions": "Book a free site visit."}
+         "sales_instructions": "Book a free site visit.", "language": "Tamil",
+         "welcome_message": "Vanakkam {customer_name}"}
 CSV = b"name,phone,City,Last Purchase\nAsha,9876543210,Chennai,Inverter\nRavi,9876543211,Madurai,\nMeena,9876543212,Salem,Panels\n"
 
 
@@ -36,18 +37,18 @@ def test_full_workflow(client, bolna, payments):
 
     res = client.post(f"/api/campaigns/{cid}/start")
     assert res.status_code == 200 and res.json()["campaign"]["status"] == "running"
+    assert "bolna_agent_id" not in res.json()["campaign"]
+    agent_campaign = bolna.agents[0]  # the agent is created from what the customer entered
+    assert agent_campaign["language"] == "Tamil" and agent_campaign["welcome_message"] == "Vanakkam {customer_name}"
     assert client.put(f"/api/campaigns/{cid}/setup", json=SETUP).status_code == 409
 
     client.worker.tick()
     assert len(bolna.calls) == 2  # concurrency limit
-    phone, data = bolna.calls[0]
-    assert phone == "+919876543210"
-    assert data["customer_name"] == "Asha" and data["business_name"] == "Acme Solar"
-    assert data["product_details"] == SETUP["product_details"]
-    assert data["sales_instructions"] == SETUP["sales_instructions"]
-    assert data["customer_details"] == "City: Chennai; Last Purchase: Inverter"
-    assert data["city"] == "Chennai"
-    assert bolna.calls[1][1]["customer_details"] == "City: Madurai"
+    agent_id, phone, data = bolna.calls[0]
+    assert agent_id == "agent-1" and phone == "+919876543210"
+    assert data == {"customer_name": "Asha", "customer_details": "City: Chennai; Last Purchase: Inverter",
+                    "city": "Chennai", "last_purchase": "Inverter"}
+    assert bolna.calls[1][2]["customer_details"] == "City: Madurai"
 
     bolna.executions["exec-0"] = {
         "id": "exec-0", "status": "completed", "transcript": "assistant: hi\nuser: yes please",
@@ -71,6 +72,7 @@ def test_full_workflow(client, bolna, payments):
     assert by_name["Ravi"]["outcome"] == "no_answer"
     assert by_name["Meena"]["outcome"] == "no_conversation"
     assert data["stats"]["done"] == 3
+    assert bolna.deleted == ["agent-1"]  # agent removed once calling finished
 
     res = client.get(f"/api/campaigns/{cid}/export")
     assert res.status_code == 200
@@ -92,6 +94,12 @@ def test_stop_skips_pending(client, bolna, payments):
     leads = client.get(f"/api/campaigns/{cid}").json()["leads"]
     assert len(bolna.calls) == 2
     assert [l["status"] for l in leads] == ["busy", "busy", "skipped"]
+    assert bolna.deleted == ["agent-1"]
+
+
+def test_unknown_language_rejected(client, payments):
+    cid = paid_campaign(client, payments)
+    assert client.put(f"/api/campaigns/{cid}/setup", json={**SETUP, "language": "Klingon"}).status_code == 422
 
 
 def test_call_timeout(client, bolna, payments):

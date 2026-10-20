@@ -11,11 +11,18 @@ class FakeBolna:
     """Stands in for Bolna in tests only; the app itself always talks to the real API."""
 
     def __init__(self):
-        self.calls, self.executions = [], {}
+        self.agents, self.deleted, self.calls, self.executions = [], [], [], {}
 
-    def start_call(self, phone, user_data):
+    def create_agent(self, campaign, webhook_url):
+        self.agents.append(campaign)
+        return "agent-1"
+
+    def delete_agent(self, agent_id):
+        self.deleted.append(agent_id)
+
+    def start_call(self, agent_id, phone, user_data):
         execution_id = f"exec-{len(self.calls)}"
-        self.calls.append((phone, user_data))
+        self.calls.append((agent_id, phone, user_data))
         self.executions[execution_id] = {"id": execution_id, "status": "ringing"}
         return execution_id
 
