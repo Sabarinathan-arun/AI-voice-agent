@@ -36,7 +36,7 @@ const $ = (id) => document.getElementById(id);
   const cfg = await (await fetch('/api/config')).json();
   $('price').textContent = new Intl.NumberFormat(undefined, {style: 'currency', currency: cfg.price_currency.toUpperCase()})
     .format(cfg.price_amount / 100);
-  $('terms').textContent = `One-time campaign for up to ${cfg.max_leads} leads. Pay securely with UPI, card or netbanking via Razorpay. Nothing is saved: download your results before you leave.`;
+  $('terms').textContent = `One-time campaign for up to ${cfg.max_leads} leads. Pay securely with UPI, card or netbanking via Razorpay. Results are kept for 24 hours, then removed for good.`;
 })();
 $('pay').onclick = async () => {
   $('pay').disabled = true;

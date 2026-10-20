@@ -36,3 +36,6 @@ th { color: var(--muted); font-weight:600; }
 details summary { cursor:pointer; color:var(--accent); font-size:13px; }
 pre { white-space:pre-wrap; font-size:12px; background:var(--bg); padding:8px; border-radius:6px; max-height:240px; overflow:auto; }
 .banner { background:#fffaeb; border:1px solid #fedf89; border-radius:8px; padding:10px 14px; font-size:14px; }
+.banner p { margin:0; }
+.link-row { margin-top:10px; flex-wrap:nowrap; }
+.link-row input { flex:1; min-width:0; padding:7px 10px; border:1px solid var(--line); border-radius:6px; font:inherit; background:#fff; }

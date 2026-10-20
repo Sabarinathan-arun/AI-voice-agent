@@ -9,8 +9,14 @@
 <body>
 <main>
   <h1>Your campaign</h1>
-  <p class="banner"><b>Nothing is saved.</b> Keep this page open until your calls finish, then download your results.
-    Next time, you start a new campaign from the beginning.</p>
+  <div class="banner">
+    <p><b>You can close this page.</b> Calls continue in the background. Save this link to come back and download
+      your results within 24 hours.</p>
+    <div class="row link-row">
+      <input type="text" id="pagelink" readonly aria-label="Link to this campaign">
+      <button type="button" class="secondary" id="copylink">Copy link</button>
+    </div>
+  </div>
   <div class="msg" id="topmsg"></div>
 
   <section class="card" id="setup-card">
@@ -145,6 +151,13 @@ $('upload').onsubmit = async (e) => {
   msg('uploadmsg', text, true); load();
 };
 
+$('copylink').onclick = async () => {
+  try { await navigator.clipboard.writeText($('pagelink').value); }
+  catch (e) { $('pagelink').select(); document.execCommand('copy'); }  // clipboard API needs https
+  $('copylink').textContent = 'Copied';
+  setTimeout(() => { $('copylink').textContent = 'Copy link'; }, 2000);
+};
+
 $('start').onclick = async () => {
   if (!confirm('Start calling all leads now? Setup and leads cannot be changed afterwards.')) return;
   $('start').disabled = true;
@@ -163,6 +176,7 @@ $('stop').onclick = async () => {
 (async () => {
   if (!id) { msg('topmsg', 'Missing campaign id.'); return; }
   if (params.has('razorpay_payment_id')) history.replaceState(null, '', `/campaign?id=${encodeURIComponent(id)}`);
+  $('pagelink').value = `${location.origin}/campaign?id=${encodeURIComponent(id)}`;
   load();
 })();
 </script>
