@@ -1,12 +1,12 @@
-"""Background worker: places calls, collects results and deletes expired campaign data."""
+"""Background worker: places calls and collects results from Bolna."""
 
 import json
 import logging
 import threading
 from datetime import datetime, timedelta
 
-from .bolna import TERMINAL_STATUSES, BolnaError
-from .db import Database, iso, utcnow
+from .bolna import TERMINAL_STATUSES, BolnaError, call_user_data
+from .store import Store, iso, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -80,8 +80,8 @@ def _outcome(status: str, extracted: dict, transcript: str | None) -> str:
 
 
 class CampaignWorker:
-    def __init__(self, db: Database, bolna, settings):
-        self.db = db
+    def __init__(self, store: Store, bolna, settings):
+        self.store = store
         self.bolna = bolna
         self.settings = settings
         self._stop = threading.Event()
@@ -110,44 +110,51 @@ class CampaignWorker:
     def tick(self, now: datetime | None = None) -> None:
         with self._tick_lock:
             now = now or utcnow()
-            for campaign in self.db.campaigns_with_status("running") + self.db.campaigns_with_status("stopped"):
+            for campaign in self.store.campaigns_with_status("running", "stopped"):
                 self.process_campaign(campaign, now)
-            self.cleanup(now)
+            self.store.drop_idle(now)
 
     # --- calls -----------------------------------------------------------------
 
     def process_campaign(self, campaign: dict, now: datetime) -> None:
-        in_flight = self.db.leads_with_status(campaign["id"], IN_FLIGHT)
+        in_flight = self.store.leads_with_status(campaign["id"], IN_FLIGHT)
         for lead in in_flight:
             self.refresh_lead(lead, now)
 
-        in_flight = self.db.leads_with_status(campaign["id"], IN_FLIGHT)
+        in_flight = self.store.leads_with_status(campaign["id"], IN_FLIGHT)
         if campaign["status"] == "running":
             free = self.settings.max_concurrent_calls - len(in_flight)
             if free > 0:
-                for lead in self.db.leads_with_status(campaign["id"], ("pending",), limit=free):
+                for lead in self.store.leads_with_status(campaign["id"], ("pending",), limit=free):
                     self.dial(campaign, lead, now)
-            if self.db.leads_with_status(campaign["id"], ("pending",), limit=1):
+            if self.store.leads_with_status(campaign["id"], ("pending",), limit=1):
                 return
-        if not self.db.leads_with_status(campaign["id"], IN_FLIGHT, limit=1):
-            if campaign["status"] == "running":
-                self.db.update_campaign(campaign["id"], status="completed", finished_at=iso(now))
-            elif not campaign.get("finished_at"):
-                self.db.update_campaign(campaign["id"], finished_at=iso(now))
+        if not self.store.leads_with_status(campaign["id"], IN_FLIGHT, limit=1) and not campaign.get("finished_at"):
+            status = "completed" if campaign["status"] == "running" else campaign["status"]
+            self.store.update_campaign(campaign["id"], status=status, finished_at=iso(now))
+            self.remove_agent(campaign)
+
+    def remove_agent(self, campaign: dict) -> None:
+        """The Bolna agent is only needed while calling; delete it so nothing is kept at Bolna's side either."""
+        if not campaign.get("bolna_agent_id"):
+            return
+        try:
+            self.bolna.delete_agent(campaign["bolna_agent_id"])
+            self.store.update_campaign(campaign["id"], bolna_agent_id=None)
+        except BolnaError as exc:
+            log.warning("could not delete Bolna agent %s: %s", campaign["bolna_agent_id"], exc)
 
     def dial(self, campaign: dict, lead: dict, now: datetime) -> None:
-        self.db.update_lead(lead["id"], status="dialing", called_at=iso(now))
+        self.store.update_lead(lead["id"], status="dialing", called_at=iso(now))
         try:
             execution_id = self.bolna.start_call(
-                campaign["bolna_agent_id"],
-                lead["phone"],
-                {"customer_name": lead["name"], "business_name": campaign["business_name"]},
+                campaign["bolna_agent_id"], lead["phone"], call_user_data(campaign, lead)
             )
         except BolnaError as exc:
             log.warning("call to lead %s failed: %s", lead["id"], exc)
-            self.db.update_lead(lead["id"], status="failed", outcome="failed", error=str(exc)[:500])
+            self.store.update_lead(lead["id"], status="failed", outcome="failed", error=str(exc)[:500])
             return
-        self.db.update_lead(lead["id"], status="queued", execution_id=execution_id)
+        self.store.update_lead(lead["id"], status="queued", execution_id=execution_id)
 
     def refresh_lead(self, lead: dict, now: datetime) -> None:
         if lead.get("execution_id"):
@@ -155,23 +162,23 @@ class CampaignWorker:
                 self.apply_execution(lead, self.bolna.get_execution(lead["execution_id"]))
             except BolnaError as exc:
                 log.warning("could not fetch execution %s: %s", lead["execution_id"], exc)
-            lead = self.db.get_lead_by_execution(lead["execution_id"]) or lead
+            lead = self.store.get_lead_by_execution(lead["execution_id"]) or lead
         if lead["status"] in IN_FLIGHT and lead.get("called_at"):
             started = datetime.fromisoformat(lead["called_at"])
             if now - started > timedelta(minutes=self.settings.call_timeout_minutes):
-                self.db.update_lead(lead["id"], status="timed_out", outcome="unknown",
+                self.store.update_lead(lead["id"], status="timed_out", outcome="unknown",
                                     error="No final call status received from Bolna")
 
     def apply_execution(self, lead: dict, execution: dict) -> None:
         fields = {k: v for k, v in parse_execution(execution).items() if v is not None}
-        self.db.update_lead(lead["id"], **fields)
+        self.store.update_lead(lead["id"], **fields)
 
     def handle_webhook(self, payload: dict) -> bool:
         """Bolna posts execution updates here. Only the id is trusted; data is re-fetched from Bolna."""
         execution_id = payload.get("id") or payload.get("execution_id")
         if not execution_id:
             return False
-        lead = self.db.get_lead_by_execution(str(execution_id))
+        lead = self.store.get_lead_by_execution(str(execution_id))
         if not lead:
             return False
         try:
@@ -180,18 +187,3 @@ class CampaignWorker:
             log.warning("webhook refresh failed for %s: %s", execution_id, exc)
             return False
         return True
-
-    # --- automatic deletion ----------------------------------------------------------
-
-    def cleanup(self, now: datetime) -> int:
-        deleted = 0
-        for campaign in self.db.expired_campaigns(now):
-            if campaign.get("bolna_agent_id"):
-                try:
-                    self.bolna.delete_agent(campaign["bolna_agent_id"])
-                except BolnaError as exc:
-                    log.warning("could not delete Bolna agent %s: %s", campaign["bolna_agent_id"], exc)
-            self.db.delete_campaign(campaign["id"])
-            log.info("deleted expired campaign %s", campaign["id"])
-            deleted += 1
-        return deleted

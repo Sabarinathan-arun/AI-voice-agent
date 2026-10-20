@@ -12,7 +12,7 @@
   <p class="muted">Upload your leads, describe your offer, and an AI voice agent calls every lead for you. No account needed.</p>
 
   <ol class="steps">
-    <li><b>1. Pay</b>One campaign, one payment</li>
+    <li><b>1. Pay</b>One-time payment</li>
     <li><b>2. Set up</b>Business, product &amp; sales script</li>
     <li><b>3. Upload</b>Excel with names &amp; phones</li>
     <li><b>4. AI calls</b>Every lead is called</li>
@@ -36,18 +36,13 @@ const $ = (id) => document.getElementById(id);
   const cfg = await (await fetch('/api/config')).json();
   $('price').textContent = new Intl.NumberFormat(undefined, {style: 'currency', currency: cfg.price_currency.toUpperCase()})
     .format(cfg.price_amount / 100);
-  $('terms').textContent = `Up to ${cfg.max_leads} leads per campaign. All campaign data is deleted automatically ${cfg.retention_hours} hours after payment — download your results before then.`
-    + (cfg.payment_provider === 'mock' ? ' (Test mode: no real payment is taken.)' : '');
-  if (new URLSearchParams(location.search).get('cancelled')) {
-    $('msg').textContent = 'Payment was cancelled.'; $('msg').className = 'msg error';
-  }
+  $('terms').textContent = `One-time campaign for up to ${cfg.max_leads} leads. Pay securely with UPI, card or netbanking via Razorpay. Nothing is saved: download your results before you leave.`;
 })();
 $('pay').onclick = async () => {
   $('pay').disabled = true;
   const res = await fetch('/api/campaigns', {method: 'POST'});
   const data = await res.json();
   if (!res.ok) { $('msg').textContent = data.detail || 'Could not start payment.'; $('msg').className = 'msg error'; $('pay').disabled = false; return; }
-  try { localStorage.setItem('lastCampaign', data.campaign_id); } catch (e) {}
   location.href = data.checkout_url;
 };
 </script>

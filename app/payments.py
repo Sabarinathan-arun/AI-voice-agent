@@ -1,92 +1,59 @@
-"""Payment providers: Stripe Checkout (hosted payment page) and a mock provider for local testing."""
+"""Razorpay payments via Payment Links: Razorpay hosts the payment page (UPI, cards, netbanking, wallets).
 
-import hashlib
-import hmac
-import json
-import time
+Flow: create a payment link for the campaign -> customer pays on Razorpay -> Razorpay redirects back
+to the campaign page -> the server asks Razorpay whether that link is paid.
+"""
 
 import httpx
 
 from .config import Settings
 
-STRIPE_API = "https://api.stripe.com/v1"
+RAZORPAY_API = "https://api.razorpay.com/v1"
 
 
 class PaymentError(RuntimeError):
     pass
 
 
-class MockPayments:
-    name = "mock"
-
+class RazorpayPayments:
     def __init__(self, settings: Settings):
+        if not (settings.razorpay_key_id and settings.razorpay_key_secret):
+            raise RuntimeError("RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET are required")
         self.settings = settings
+        self._http = httpx.Client(
+            base_url=RAZORPAY_API, auth=(settings.razorpay_key_id, settings.razorpay_key_secret), timeout=30
+        )
 
-    def create_checkout(self, campaign_id: str) -> str:
-        return f"{self.settings.app_base_url}/api/payments/mock/complete?campaign_id={campaign_id}"
-
-    def verify_session(self, session_id: str) -> tuple[str, str] | None:
-        return None
-
-
-class StripePayments:
-    name = "stripe"
-
-    def __init__(self, settings: Settings):
-        if not settings.stripe_secret_key:
-            raise RuntimeError("STRIPE_SECRET_KEY is required when PAYMENT_PROVIDER=stripe")
-        self.settings = settings
-        self._http = httpx.Client(base_url=STRIPE_API, auth=(settings.stripe_secret_key, ""), timeout=30)
-
-    def create_checkout(self, campaign_id: str) -> str:
-        base = self.settings.app_base_url
-        data = {
-            "mode": "payment",
-            "client_reference_id": campaign_id,
-            "metadata[campaign_id]": campaign_id,
-            "line_items[0][quantity]": "1",
-            "line_items[0][price_data][currency]": self.settings.price_currency,
-            "line_items[0][price_data][unit_amount]": str(self.settings.price_amount),
-            "line_items[0][price_data][product_data][name]": self.settings.product_name,
-            "success_url": f"{base}/campaign?id={campaign_id}&session_id={{CHECKOUT_SESSION_ID}}",
-            "cancel_url": f"{base}/?cancelled=1",
+    def create_checkout(self, campaign_id: str) -> tuple[str, str]:
+        """Return (payment_url, payment_link_id)."""
+        body = {
+            "amount": self.settings.price_amount,
+            "currency": self.settings.price_currency.upper(),
+            "description": self.settings.product_name,
+            "reference_id": campaign_id,
+            "callback_url": f"{self.settings.app_base_url}/campaign?id={campaign_id}",
+            "callback_method": "get",
         }
-        resp = self._http.post("/checkout/sessions", data=data)
+        try:
+            resp = self._http.post("/payment_links", json=body)
+        except httpx.HTTPError as exc:
+            raise PaymentError(f"Could not reach Razorpay: {exc}") from exc
         if resp.status_code >= 400:
-            raise PaymentError(f"Stripe error: {resp.text[:300]}")
-        return resp.json()["url"]
+            raise PaymentError(f"Razorpay error: {resp.text[:300]}")
+        link = resp.json()
+        return link["short_url"], link["id"]
 
-    def verify_session(self, session_id: str) -> tuple[str, str] | None:
-        """Return (campaign_id, session_id) if the Checkout Session has been paid."""
-        resp = self._http.get(f"/checkout/sessions/{session_id}")
+    def is_paid(self, payment_link_id: str, campaign_id: str) -> bool:
+        """Ask Razorpay directly; never trust the redirect's query string on its own."""
+        try:
+            resp = self._http.get(f"/payment_links/{payment_link_id}")
+        except httpx.HTTPError:
+            return False
         if resp.status_code >= 400:
-            return None
-        session = resp.json()
-        if session.get("payment_status") != "paid":
-            return None
-        return session.get("client_reference_id"), session["id"]
-
-    def parse_webhook(self, payload: bytes, signature_header: str, tolerance: int = 300) -> dict:
-        """Verify the Stripe-Signature header and return the event."""
-        secret = self.settings.stripe_webhook_secret
-        if not secret:
-            raise PaymentError("STRIPE_WEBHOOK_SECRET is not configured")
-        items = [p.strip().split("=", 1) for p in signature_header.split(",") if "=" in p]
-        timestamp = next((v for k, v in items if k == "t"), None)
-        signatures = [v for k, v in items if k == "v1"]
-        if not timestamp or not signatures:
-            raise PaymentError("Malformed Stripe-Signature header")
-        if abs(time.time() - int(timestamp)) > tolerance:
-            raise PaymentError("Stripe webhook timestamp outside tolerance")
-        expected = hmac.new(secret.encode(), f"{timestamp}.".encode() + payload, hashlib.sha256).hexdigest()
-        if not any(hmac.compare_digest(expected, s) for s in signatures):
-            raise PaymentError("Invalid Stripe webhook signature")
-        return json.loads(payload)
+            return False
+        link = resp.json()
+        return link.get("status") == "paid" and link.get("reference_id") == campaign_id
 
 
 def make_payment_provider(settings: Settings):
-    if settings.payment_provider == "stripe":
-        return StripePayments(settings)
-    if settings.payment_provider == "mock":
-        return MockPayments(settings)
-    raise RuntimeError(f"Unknown PAYMENT_PROVIDER: {settings.payment_provider}")
+    return RazorpayPayments(settings)

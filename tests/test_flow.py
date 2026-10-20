@@ -4,43 +4,48 @@ from datetime import timedelta
 
 from openpyxl import load_workbook
 
-from app.db import utcnow
+from app.store import utcnow
 from app.worker import parse_execution
 
 SETUP = {"business_name": "Acme Solar", "product_details": "Rooftop solar, 3kW from 1.5L",
          "sales_instructions": "Book a free site visit."}
-CSV = b"name,phone\nAsha,9876543210\nRavi,9876543211\nMeena,9876543212\n"
+CSV = b"name,phone,City,Last Purchase\nAsha,9876543210,Chennai,Inverter\nRavi,9876543211,Madurai,\nMeena,9876543212,Salem,Panels\n"
 
 
-def paid_campaign(client):
+def paid_campaign(client, payments):
     res = client.post("/api/campaigns")
     assert res.status_code == 201
     cid = res.json()["campaign_id"]
-    assert client.get(f"/api/campaigns/{cid}").json()["campaign"]["status"] == "pending_payment"
-    # setup is locked until paid
+    assert res.json()["checkout_url"].startswith("https://rzp.io/")
+    # not paid yet: verify does nothing and setup is locked
+    assert client.post(f"/api/campaigns/{cid}/verify-payment").json()["status"] == "pending_payment"
     assert client.put(f"/api/campaigns/{cid}/setup", json=SETUP).status_code == 409
-    res = client.get(res.json()["checkout_url"].replace("http://testserver", ""), follow_redirects=False)
-    assert res.status_code == 303
+    payments.paid.add(cid)
+    assert client.post(f"/api/campaigns/{cid}/verify-payment").json()["status"] == "paid"
     return cid
 
 
-def test_full_workflow(client, bolna):
-    cid = paid_campaign(client)
+def test_full_workflow(client, bolna, payments):
+    cid = paid_campaign(client, payments)
     assert client.post(f"/api/campaigns/{cid}/start").status_code == 422  # nothing set up yet
 
     assert client.put(f"/api/campaigns/{cid}/setup", json=SETUP).status_code == 200
     res = client.post(f"/api/campaigns/{cid}/leads", files={"file": ("leads.csv", CSV, "text/csv")})
     assert res.json()["imported"] == 3
+    assert res.json()["detail_columns"] == ["City", "Last Purchase"]
 
     res = client.post(f"/api/campaigns/{cid}/start")
     assert res.status_code == 200 and res.json()["campaign"]["status"] == "running"
     assert "bolna_agent_id" not in res.json()["campaign"]
-    # setup is locked once running
+    assert bolna.agents[0]["detail_fields"] == [{"key": "city", "label": "City"},
+                                                {"key": "last_purchase", "label": "Last Purchase"}]
     assert client.put(f"/api/campaigns/{cid}/setup", json=SETUP).status_code == 409
 
     client.worker.tick()
     assert len(bolna.calls) == 2  # concurrency limit
-    assert bolna.calls[0][2] == {"customer_name": "Asha", "business_name": "Acme Solar"}
+    assert bolna.calls[0][2] == {"customer_name": "Asha", "business_name": "Acme Solar",
+                                 "city": "Chennai", "last_purchase": "Inverter"}
+    assert bolna.calls[1][2]["last_purchase"] == ""
 
     bolna.executions["exec-0"] = {
         "id": "exec-0", "status": "completed", "transcript": "assistant: hi\nuser: yes please",
@@ -64,17 +69,17 @@ def test_full_workflow(client, bolna):
     assert by_name["Ravi"]["outcome"] == "no_answer"
     assert by_name["Meena"]["outcome"] == "no_conversation"
     assert data["stats"]["done"] == 3
+    assert bolna.deleted == ["agent-1"]  # agent removed once calling finished
 
     res = client.get(f"/api/campaigns/{cid}/export")
     assert res.status_code == 200
-    ws = load_workbook(io.BytesIO(res.content)).active
-    rows = list(ws.iter_rows(values_only=True))
-    assert rows[0][:4] == ("Name", "Phone", "Call status", "Outcome")
-    assert rows[1][0] == "Asha" and rows[1][3] == "interested"
+    rows = list(load_workbook(io.BytesIO(res.content)).active.iter_rows(values_only=True))
+    assert rows[0][:7] == ("Name", "Phone", "City", "Last Purchase", "Call status", "Outcome", "Summary")
+    assert rows[1][:6] == ("Asha", "+919876543210", "Chennai", "Inverter", "completed", "interested")
 
 
-def test_stop_skips_pending(client, bolna):
-    cid = paid_campaign(client)
+def test_stop_skips_pending(client, bolna, payments):
+    cid = paid_campaign(client, payments)
     client.put(f"/api/campaigns/{cid}/setup", json=SETUP)
     client.post(f"/api/campaigns/{cid}/leads", files={"file": ("leads.csv", CSV, "text/csv")})
     client.post(f"/api/campaigns/{cid}/start")
@@ -86,10 +91,11 @@ def test_stop_skips_pending(client, bolna):
     leads = client.get(f"/api/campaigns/{cid}").json()["leads"]
     assert len(bolna.calls) == 2
     assert [l["status"] for l in leads] == ["busy", "busy", "skipped"]
+    assert bolna.deleted == ["agent-1"]
 
 
-def test_call_timeout(client, bolna):
-    cid = paid_campaign(client)
+def test_call_timeout(client, bolna, payments):
+    cid = paid_campaign(client, payments)
     client.put(f"/api/campaigns/{cid}/setup", json=SETUP)
     client.post(f"/api/campaigns/{cid}/leads", files={"file": ("l.csv", b"name,phone\nA,9876543210\n", "text/csv")})
     client.post(f"/api/campaigns/{cid}/start")
@@ -100,28 +106,9 @@ def test_call_timeout(client, bolna):
     assert data["campaign"]["status"] == "completed"
 
 
-def test_automatic_deletion(client, bolna, settings):
-    cid = paid_campaign(client)
-    client.put(f"/api/campaigns/{cid}/setup", json=SETUP)
-    client.post(f"/api/campaigns/{cid}/leads", files={"file": ("leads.csv", CSV, "text/csv")})
-    client.post(f"/api/campaigns/{cid}/start")
-    client.worker.tick(utcnow() + timedelta(hours=settings.retention_hours - 1))
-    assert client.get(f"/api/campaigns/{cid}").status_code == 200
-    client.worker.cleanup(utcnow() + timedelta(hours=settings.retention_hours + 1))
-    assert client.get(f"/api/campaigns/{cid}").status_code == 404
-    assert client.db.get_leads(cid) == []
-    assert bolna.deleted == ["agent-1"]
-
-
-def test_unpaid_campaign_deleted(client, settings):
-    cid = client.post("/api/campaigns").json()["campaign_id"]
-    client.worker.cleanup(utcnow() + timedelta(hours=settings.unpaid_retention_hours + 1))
-    assert client.get(f"/api/campaigns/{cid}").status_code == 404
-
-
-def test_manual_delete(client):
-    cid = paid_campaign(client)
-    assert client.delete(f"/api/campaigns/{cid}").status_code == 204
+def test_nothing_is_kept_after_idle_session(client, payments):
+    cid = paid_campaign(client, payments)
+    client.worker.tick(utcnow() + timedelta(hours=25))
     assert client.get(f"/api/campaigns/{cid}").status_code == 404
 
 

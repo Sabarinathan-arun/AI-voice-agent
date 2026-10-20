@@ -8,11 +8,13 @@ from app.main import create_app
 
 
 class FakeBolna:
+    """Stands in for Bolna in tests only; the app itself always talks to the real API."""
+
     def __init__(self):
         self.agents, self.deleted, self.calls, self.executions = [], [], [], {}
 
     def create_agent(self, campaign, webhook_url):
-        self.agents.append(campaign["id"])
+        self.agents.append(campaign)
         return "agent-1"
 
     def delete_agent(self, agent_id):
@@ -28,11 +30,19 @@ class FakeBolna:
         return self.executions[execution_id]
 
 
+class FakeRazorpay:
+    def __init__(self):
+        self.paid: set[str] = set()
+
+    def create_checkout(self, campaign_id):
+        return f"https://rzp.io/i/{campaign_id}", f"plink_{campaign_id}"
+
+    def is_paid(self, payment_link_id, campaign_id):
+        return payment_link_id == f"plink_{campaign_id}" and campaign_id in self.paid
+
+
 @pytest.fixture
-def settings(tmp_path, monkeypatch):
-    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "test.db"))
-    monkeypatch.setenv("PAYMENT_PROVIDER", "mock")
-    monkeypatch.setenv("BOLNA_MOCK", "true")
+def settings():
     return dataclasses.replace(load_settings(), max_concurrent_calls=2, app_base_url="http://testserver")
 
 
@@ -42,9 +52,14 @@ def bolna():
 
 
 @pytest.fixture
-def client(settings, bolna):
-    app = create_app(settings, bolna=bolna, run_worker=False)
+def payments():
+    return FakeRazorpay()
+
+
+@pytest.fixture
+def client(settings, bolna, payments):
+    app = create_app(settings, bolna=bolna, payments=payments, run_worker=False)
     with TestClient(app) as c:
         c.worker = app.state.worker
-        c.db = app.state.db
+        c.store = app.state.store
         yield c

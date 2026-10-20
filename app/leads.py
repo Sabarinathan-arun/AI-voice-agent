@@ -15,10 +15,37 @@ class LeadFileError(ValueError):
     pass
 
 
+RESERVED_KEYS = {"customer_name", "business_name", "phone", "name"}
+
+
 @dataclass
 class ParseResult:
     leads: list[dict] = field(default_factory=list)
     errors: list[dict] = field(default_factory=list)
+    # Extra columns besides name/phone, passed to the voice agent: [{"key": "city", "label": "City"}]
+    detail_fields: list[dict] = field(default_factory=list)
+
+
+def _field_key(label: str, used: set[str]) -> str:
+    """Turn a column header into a variable name Bolna can use in the prompt, e.g. 'Last Purchase' -> last_purchase."""
+    key = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")[:40] or "field"
+    if key[0].isdigit() or key in RESERVED_KEYS:
+        key = "lead_" + key
+    base, n = key, 2
+    while key in used:
+        key, n = f"{base}_{n}", n + 1
+    used.add(key)
+    return key
+
+
+def _cell_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value).strip()[:500]
 
 
 def normalize_phone(raw, default_country_code: str) -> str | None:
@@ -83,7 +110,8 @@ def parse_leads(filename: str, content: bytes, default_country_code: str, max_le
     if not rows:
         raise LeadFileError("The file is empty.")
 
-    header = [str(c or "").strip().lower() for c in rows[0]]
+    raw_header = [str(c or "").strip() for c in rows[0]]
+    header = [h.lower() for h in raw_header]
     phone_col = _find_column(header, PHONE_HEADERS)
     name_col = _find_column([h if i != phone_col else "" for i, h in enumerate(header)], NAME_HEADERS)
     if phone_col is not None:
@@ -99,6 +127,15 @@ def parse_leads(filename: str, content: bytes, default_country_code: str, max_le
             data_rows, first_row_number = rows[1:], 2
 
     result = ParseResult()
+    detail_cols: list[tuple[int, str]] = []
+    if first_row_number == 2:  # the file has a header row: every other named column becomes a lead detail
+        used: set[str] = set()
+        for i, label in enumerate(raw_header):
+            if i not in (name_col, phone_col) and label:
+                key = _field_key(label, used)
+                detail_cols.append((i, key))
+                result.detail_fields.append({"key": key, "label": label[:100]})
+
     seen: set[str] = set()
     for offset, row in enumerate(data_rows):
         row_number = first_row_number + offset
@@ -113,7 +150,8 @@ def parse_leads(filename: str, content: bytes, default_country_code: str, max_le
             continue
         seen.add(phone)
         lead_name = str(raw_name).strip() if raw_name not in (None, "") else "there"
-        result.leads.append({"row_number": row_number, "name": lead_name[:200], "phone": phone})
+        details = {key: _cell_text(row[i] if i < len(row) else None) for i, key in detail_cols}
+        result.leads.append({"row_number": row_number, "name": lead_name[:200], "phone": phone, "details": details})
 
     if not result.leads:
         raise LeadFileError("No valid leads found. The file needs a name column and a phone number column.")

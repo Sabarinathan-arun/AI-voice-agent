@@ -1,18 +1,14 @@
-"""Thin client for the Bolna voice-agent API, plus an offline mock for local testing.
+"""Thin client for the Bolna voice-agent API.
 
 Bolna endpoints used:
   POST   /v2/agent                   create the sales agent for a campaign
-  DELETE /v2/agent/{agent_id}        remove it when the campaign data is deleted
+  DELETE /v2/agent/{agent_id}        remove it once the campaign has finished calling
   POST   /call                       place one outbound call -> execution_id
   GET    /executions/{execution_id}  call status, transcript, summary, extracted data
 """
 
 import copy
 import json
-import random
-import threading
-import time
-import uuid
 
 import httpx
 
@@ -37,6 +33,25 @@ class BolnaError(RuntimeError):
     pass
 
 
+def _customer_details_section(campaign: dict) -> str:
+    """Extra columns from the uploaded Excel, filled in per call by Bolna from user_data."""
+    fields = campaign.get("detail_fields") or []
+    if not fields:
+        return ""
+    lines = "\n".join(f"- {f['label']}: {{{f['key']}}}" for f in fields)
+    return f"""
+## What we know about this customer (use it to personalise the call; ignore empty values)
+{lines}
+"""
+
+
+def call_user_data(campaign: dict, lead: dict) -> dict:
+    data = {"customer_name": lead["name"], "business_name": campaign["business_name"]}
+    for f in campaign.get("detail_fields") or []:
+        data[f["key"]] = (lead.get("details") or {}).get(f["key"], "")
+    return data
+
+
 def build_system_prompt(campaign: dict) -> str:
     language = campaign.get("language") or "English"
     return f"""You are a friendly, professional sales representative calling on behalf of {campaign['business_name']}.
@@ -50,7 +65,7 @@ You are speaking on the phone with {{customer_name}}. Speak in {language}. Keep 
 
 ## Sales instructions (follow these closely)
 {campaign['sales_instructions']}
-
+{_customer_details_section(campaign)}
 ## Rules
 - Confirm you are speaking with {{customer_name}}. If it is a wrong number, apologise and end the call.
 - Never invent prices, discounts or facts that are not given above. If unsure, offer to have the team follow up.
@@ -119,60 +134,7 @@ class BolnaClient:
         return self._request("GET", f"/executions/{execution_id}")
 
 
-class MockBolnaClient:
-    """Simulates Bolna so the full workflow can be tried without an account or real calls."""
-
-    CALL_SECONDS = 6
-
-    def __init__(self, settings: Settings):
-        self.settings = settings
-        self._calls: dict[str, dict] = {}
-        self._lock = threading.Lock()
-
-    def create_agent(self, campaign: dict, webhook_url: str | None) -> str:
-        build_agent_payload(self.settings.bolna_agent_template, campaign, webhook_url)  # validate template
-        return f"mock-agent-{uuid.uuid4().hex[:12]}"
-
-    def delete_agent(self, agent_id: str) -> None:
-        pass
-
-    def start_call(self, agent_id: str, phone: str, user_data: dict) -> str:
-        execution_id = f"mock-exec-{uuid.uuid4().hex}"
-        with self._lock:
-            self._calls[execution_id] = {"started": time.time(), "name": user_data.get("customer_name", "there")}
-        return execution_id
-
-    def get_execution(self, execution_id: str) -> dict:
-        with self._lock:
-            call = self._calls.get(execution_id)
-        if not call:
-            raise BolnaError("Unknown execution")
-        elapsed = time.time() - call["started"]
-        if elapsed < 2:
-            return {"id": execution_id, "status": "ringing"}
-        if elapsed < self.CALL_SECONDS:
-            return {"id": execution_id, "status": "in-progress"}
-        rnd = random.Random(execution_id)
-        status = rnd.choices(["completed", "no-answer", "busy"], weights=[7, 2, 1])[0]
-        if status != "completed":
-            return {"id": execution_id, "status": status, "conversation_duration": 0}
-        outcome = rnd.choice(["interested", "not_interested", "callback_requested"])
-        name = call["name"]
-        return {
-            "id": execution_id,
-            "status": "completed",
-            "conversation_duration": rnd.randint(30, 180),
-            "transcript": f"assistant: Hello {name}, do you have a minute?\nuser: Sure, go ahead.\n"
-                          f"assistant: (pitch)\nuser: ({outcome.replace('_', ' ')})",
-            "summary": f"[Mock call] {name} was {outcome.replace('_', ' ')} after hearing the offer.",
-            "extracted_data": {"outcome": outcome, "interest_level": rnd.choice(["high", "medium", "low"])},
-            "telephony_data": {"recording_url": None},
-        }
-
-
 def make_bolna_client(settings: Settings):
-    if settings.bolna_mock:
-        return MockBolnaClient(settings)
     if not settings.bolna_api_key:
-        raise RuntimeError("BOLNA_API_KEY is required unless BOLNA_MOCK=true")
+        raise RuntimeError("BOLNA_API_KEY is required")
     return BolnaClient(settings)

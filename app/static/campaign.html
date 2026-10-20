@@ -9,8 +9,8 @@
 <body>
 <main>
   <h1>Your campaign</h1>
-  <p class="banner">There is no login: <b>bookmark this page</b> — its link is the only way back to your campaign.
-    Data is deleted automatically on <b id="expires">…</b>.</p>
+  <p class="banner"><b>Nothing is saved.</b> Keep this page open until your calls finish, then download your results.
+    Next time, you start a new campaign from the beginning.</p>
   <div class="msg" id="topmsg"></div>
 
   <section class="card" id="setup-card">
@@ -35,7 +35,7 @@
 
   <section class="card" id="upload-card">
     <h2>3. Upload leads</h2>
-    <p class="muted">Excel (.xlsx) or CSV with a <b>name</b> column and a <b>phone</b> column. Numbers without a country code get the default one.</p>
+    <p class="muted">Excel (.xlsx) or CSV with a <b>name</b> column and a <b>phone</b> column. Any other columns (city, company, last purchase…) are given to the AI agent to personalise each call.</p>
     <form id="upload">
       <input type="file" id="file" accept=".xlsx,.csv" required>
       <div class="row"><button type="submit">Upload</button></div>
@@ -64,7 +64,6 @@
     </div>
     <div class="row">
       <a class="btn" id="export" href="#">6. Download results (.xlsx)</a>
-      <button class="secondary" id="delete">Delete campaign data now</button>
     </div>
   </section>
 </main>
@@ -81,13 +80,13 @@ function msg(el, text, ok) { $(el).textContent = text; $(el).className = 'msg ' 
 async function errText(res) { try { const d = await res.json(); return typeof d.detail === 'string' ? d.detail : JSON.stringify(d.detail); } catch (e) { return res.statusText; } }
 
 async function load() {
+  await api('/verify-payment', {method: 'POST'}).catch(() => {});
   const res = await api('');
   if (!res.ok) { msg('topmsg', await errText(res)); document.querySelectorAll('section').forEach(s => s.classList.add('locked')); return; }
   render(await res.json());
 }
 
 function render({campaign: c, stats, leads}) {
-  $('expires').textContent = new Date(c.expires_at).toLocaleString();
   const editable = c.status === 'paid';
   if (c.status === 'pending_payment') msg('topmsg', 'Waiting for payment confirmation…', true);
   else $('topmsg').textContent = '';
@@ -141,6 +140,7 @@ $('upload').onsubmit = async (e) => {
   if (!res.ok) return msg('uploadmsg', await errText(res));
   const d = await res.json();
   let text = `Imported ${d.imported} leads.`;
+  if (d.detail_columns.length) text += ` Extra details for the AI agent: ${d.detail_columns.join(', ')}.`;
   if (d.rejected_count) text += ` Skipped ${d.rejected_count} rows: ` + d.rejected.slice(0, 5).map(r => `row ${r.row} (${r.reason})`).join('; ');
   msg('uploadmsg', text, true); load();
 };
@@ -160,20 +160,9 @@ $('stop').onclick = async () => {
   render(await res.json());
 };
 
-$('delete').onclick = async () => {
-  if (!confirm('Permanently delete this campaign, its leads and all call results? Download your results first.')) return;
-  const res = await api('', {method: 'DELETE'});
-  if (!res.ok) return alert(await errText(res));
-  location.href = '/';
-};
-
 (async () => {
   if (!id) { msg('topmsg', 'Missing campaign id.'); return; }
-  const session = params.get('session_id');
-  if (session) {
-    await api('/verify-payment', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({session_id: session})});
-    history.replaceState(null, '', `/campaign?id=${encodeURIComponent(id)}`);
-  }
+  if (params.has('razorpay_payment_id')) history.replaceState(null, '', `/campaign?id=${encodeURIComponent(id)}`);
   load();
 })();
 </script>
