@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import threading
 from datetime import datetime, timedelta
 
@@ -24,6 +25,35 @@ def _first(data: dict, *keys):
     return None
 
 
+def _norm(key) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(key).lower())
+
+
+def _find_extracted(data, *names):
+    """Find a field anywhere in extracted_data. Bolna nests it by category, e.g. {"General": {"Call Summary": ...}}."""
+    wanted = {_norm(n) for n in names}
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if _norm(key) in wanted:
+                return _plain(value)
+        for value in data.values():
+            found = _find_extracted(value, *names)
+            if found:
+                return found
+    return None
+
+
+def _plain(value):
+    """Reduce an extracted value such as {"subjective": "..."} or {"value": "..."} to text."""
+    if isinstance(value, dict):
+        for key in ("value", "subjective", "answer", "text"):
+            if value.get(key):
+                return str(value[key])
+        texts = [str(v) for v in value.values() if isinstance(v, (str, int, float)) and str(v)]
+        return "; ".join(texts) or None
+    return str(value) if value not in (None, "") else None
+
+
 def parse_execution(execution: dict) -> dict:
     """Map a Bolna execution payload to lead fields. Tolerant of missing fields."""
     status = str(execution.get("status") or "unknown").lower()
@@ -39,7 +69,7 @@ def parse_execution(execution: dict) -> dict:
     transcript = _first(execution, "transcript")
     if isinstance(transcript, list):
         transcript = "\n".join(f"{t.get('role', '')}: {t.get('content', '')}" for t in transcript if isinstance(t, dict))
-    summary = _first(execution, "summary")
+    summary = _first(execution, "summary") or _find_extracted(extracted, "call summary", "summary")
     duration = _first(execution, "conversation_duration", "conversation_time") or _first(telephony, "duration")
     try:
         duration = float(duration) if duration is not None else None
@@ -69,9 +99,7 @@ def parse_execution(execution: dict) -> dict:
 def _outcome(status: str, extracted: dict, transcript: str | None) -> str:
     if status in NOT_REACHED:
         return NOT_REACHED[status]
-    value = extracted.get("outcome")
-    if isinstance(value, dict):  # some extraction formats nest the value
-        value = value.get("value") or value.get("outcome")
+    value = _find_extracted(extracted, "outcome")
     if value:
         return str(value).strip().lower().replace(" ", "_")
     if not transcript or "user:" not in transcript.lower():

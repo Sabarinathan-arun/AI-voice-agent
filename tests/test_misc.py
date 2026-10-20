@@ -21,15 +21,17 @@ def test_export_neutralises_formulas():
 
 def test_agent_payload_includes_lead_details(settings):
     campaign = {"id": "abcdefgh123", "business_name": "Acme", "business_description": "",
-                "product_details": "Solar", "sales_instructions": "Book a visit", "welcome_message": "",
+                "product_details": "Solar", "sales_instructions": "Book a visit", "welcome_message": "Hi {customer_name}, {{business_name}} here",
                 "language": "Hindi", "detail_fields": [{"key": "city", "label": "City"}]}
     payload = build_agent_payload(settings.bolna_agent_template, campaign, "https://x/hook")
     cfg = payload["agent_config"]
     assert cfg["webhook_url"] == "https://x/hook"
-    assert "Acme" in cfg["agent_welcome_message"] and "{customer_name}" in cfg["agent_welcome_message"]
+    assert cfg["agent_welcome_message"] == "Hi {{customer_name}}, Acme here"
+    assert cfg["call_summary_enabled"] is True
     prompt = payload["agent_prompts"]["task_1"]["system_prompt"]
-    assert "Book a visit" in prompt and "Hindi" in prompt and "{customer_name}" in prompt
-    assert "- City: {city}" in prompt
+    assert "Book a visit" in prompt and "Hindi" in prompt and "{{customer_name}}" in prompt
+    assert "- City: {{city}}" in prompt
+    assert "{customer_name}" not in prompt.replace("{{customer_name}}", "")
 
 
 def test_razorpay_payment_link(settings):

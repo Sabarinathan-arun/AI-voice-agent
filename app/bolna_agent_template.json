@@ -1,7 +1,7 @@
 {
   "agent_config": {
     "agent_name": "Sales Agent",
-    "agent_welcome_message": "Hello {customer_name}, this is an assistant calling from {business_name}. Do you have a minute?",
+    "agent_welcome_message": "Hello {{customer_name}}, this is an assistant calling from {{business_name}}. Do you have a minute?",
     "webhook_url": null,
     "agent_type": "other",
     "tasks": [

@@ -9,6 +9,7 @@ Bolna endpoints used:
 
 import copy
 import json
+import re
 
 import httpx
 
@@ -29,16 +30,19 @@ EXTRACTION_PROMPT = (
 )
 
 
+SINGLE_BRACE_VAR = re.compile(r"(?<!\{)\{(\w+)\}(?!\})")
+
+
 class BolnaError(RuntimeError):
     pass
 
 
 def _customer_details_section(campaign: dict) -> str:
-    """Extra columns from the uploaded Excel, filled in per call by Bolna from user_data."""
+    """Extra columns from the uploaded Excel. Bolna fills each {{variable}} per call from user_data."""
     fields = campaign.get("detail_fields") or []
     if not fields:
         return ""
-    lines = "\n".join(f"- {f['label']}: {{{f['key']}}}" for f in fields)
+    lines = "\n".join(f"- {f['label']}: " + "{{" + f["key"] + "}}" for f in fields)
     return f"""
 ## What we know about this customer (use it to personalise the call; ignore empty values)
 {lines}
@@ -55,7 +59,7 @@ def call_user_data(campaign: dict, lead: dict) -> dict:
 def build_system_prompt(campaign: dict) -> str:
     language = campaign.get("language") or "English"
     return f"""You are a friendly, professional sales representative calling on behalf of {campaign['business_name']}.
-You are speaking on the phone with {{customer_name}}. Speak in {language}. Keep every reply short (1-2 sentences), natural and conversational.
+You are speaking on the phone with {{{{customer_name}}}}. Speak in {language}. Keep every reply short (1-2 sentences), natural and conversational.
 
 ## About the business
 {campaign.get('business_description') or ''}
@@ -67,7 +71,7 @@ You are speaking on the phone with {{customer_name}}. Speak in {language}. Keep 
 {campaign['sales_instructions']}
 {_customer_details_section(campaign)}
 ## Rules
-- Confirm you are speaking with {{customer_name}}. If it is a wrong number, apologise and end the call.
+- Confirm you are speaking with {{{{customer_name}}}}. If it is a wrong number, apologise and end the call.
 - Never invent prices, discounts or facts that are not given above. If unsure, offer to have the team follow up.
 - If the customer is not interested or asks not to be called, thank them politely and end the call.
 - If the customer is busy, ask for a convenient time to call back and end the call.
@@ -82,7 +86,9 @@ def build_agent_payload(template_path: str, campaign: dict, webhook_url: str | N
     cfg = payload.setdefault("agent_config", {})
     cfg["agent_name"] = f"{campaign['business_name']} sales ({campaign['id'][:8]})"[:100]
     welcome = campaign.get("welcome_message") or cfg.get("agent_welcome_message") or ""
-    cfg["agent_welcome_message"] = welcome.replace("{business_name}", campaign["business_name"])
+    welcome = SINGLE_BRACE_VAR.sub(r"{{\1}}", welcome)  # accept {name} typed by users, Bolna needs {{name}}
+    cfg["agent_welcome_message"] = welcome.replace("{{business_name}}", campaign["business_name"])
+    cfg.setdefault("call_summary_enabled", True)  # Bolna returns a summary only when this is on
     cfg["webhook_url"] = webhook_url
     cfg.setdefault("summarization_details", "Summarise the sales call in 2-3 sentences.")
     cfg.setdefault("extraction_details", EXTRACTION_PROMPT)

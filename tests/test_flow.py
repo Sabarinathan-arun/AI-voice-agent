@@ -118,3 +118,18 @@ def test_parse_execution_variants():
     assert f["outcome"] == "callback_requested" and f["transcript"] == "user: hi" and f["summary"] == "user: hi"
     assert parse_execution({"status": "scheduled"})["status"] == "in-progress"
     assert "outcome" not in parse_execution({"status": "ringing"})
+    assert "outcome" not in parse_execution({"status": "call-disconnected"})  # wait for 'completed'
+
+
+def test_parse_execution_nested_extraction():
+    # shape from Bolna's API quickstart: extracted data grouped by category
+    f = parse_execution({
+        "status": "completed", "conversation_duration": 16, "transcript": "assistant: hi\nuser: hello",
+        "extracted_data": {"General": {"Call Summary": {"subjective": "Customer wants a demo."},
+                                       "Outcome": {"value": "Interested"}}},
+        "telephony_data": {"duration": 16, "recording_url": "https://api.bolna.ai/recordings/call/x",
+                           "hangup_reason": "inactivity_timeout"},
+    })
+    assert f["summary"] == "Customer wants a demo."
+    assert f["outcome"] == "interested"
+    assert f["duration_seconds"] == 16 and f["recording_url"].endswith("/x")
