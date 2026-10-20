@@ -45,7 +45,6 @@ class Store:
                 "welcome_message": None,
                 "language": None,
                 "detail_fields": [],  # extra Excel columns: [{"key": "city", "label": "City"}, ...]
-                "bolna_agent_id": None,
                 "started_at": None,
                 "finished_at": None,
                 "last_activity": utcnow(),

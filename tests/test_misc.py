@@ -5,7 +5,7 @@ import json
 import httpx
 from openpyxl import load_workbook
 
-from app.bolna import build_agent_payload
+from app.bolna import call_user_data
 from app.export import build_results_workbook
 from app.payments import RazorpayPayments
 
@@ -19,19 +19,20 @@ def test_export_neutralises_formulas():
     assert ws["E2"].value == "'+cmd"
 
 
-def test_agent_payload_includes_lead_details(settings):
-    campaign = {"id": "abcdefgh123", "business_name": "Acme", "business_description": "",
-                "product_details": "Solar", "sales_instructions": "Book a visit", "welcome_message": "Hi {customer_name}, {{business_name}} here",
-                "language": "Hindi", "detail_fields": [{"key": "city", "label": "City"}]}
-    payload = build_agent_payload(settings.bolna_agent_template, campaign, "https://x/hook")
-    cfg = payload["agent_config"]
-    assert cfg["webhook_url"] == "https://x/hook"
-    assert cfg["agent_welcome_message"] == "Hi {{customer_name}}, Acme here"
-    assert cfg["call_summary_enabled"] is True
-    prompt = payload["agent_prompts"]["task_1"]["system_prompt"]
-    assert "Book a visit" in prompt and "Hindi" in prompt and "{{customer_name}}" in prompt
-    assert "- City: {{city}}" in prompt
-    assert "{customer_name}" not in prompt.replace("{{customer_name}}", "")
+def test_call_user_data():
+    campaign = {"business_name": "Acme", "business_description": "", "product_details": "Solar",
+                "sales_instructions": "Book a visit", "welcome_message": "Hi {customer_name}, {business_name} here",
+                "language": "Hindi", "detail_fields": [{"key": "city", "label": "City"},
+                                                       {"key": "plan", "label": "Plan"}]}
+    lead = {"name": "Asha", "details": {"city": "Chennai", "plan": ""}}
+    data = call_user_data(campaign, lead)
+    assert data["welcome_message"] == "Hi Asha, Acme here"
+    assert data["language"] == "Hindi" and data["product_details"] == "Solar"
+    assert data["customer_details"] == "City: Chennai"
+    assert data["city"] == "Chennai" and data["plan"] == ""
+    campaign["welcome_message"] = ""
+    assert call_user_data(campaign, {"name": "Ravi"})["welcome_message"].startswith("Hello Ravi, I'm calling from Acme")
+    assert call_user_data(campaign, {"name": "Ravi"})["customer_details"] == "none"
 
 
 def test_razorpay_payment_link(settings):

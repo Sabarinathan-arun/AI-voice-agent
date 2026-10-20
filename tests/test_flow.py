@@ -36,16 +36,18 @@ def test_full_workflow(client, bolna, payments):
 
     res = client.post(f"/api/campaigns/{cid}/start")
     assert res.status_code == 200 and res.json()["campaign"]["status"] == "running"
-    assert "bolna_agent_id" not in res.json()["campaign"]
-    assert bolna.agents[0]["detail_fields"] == [{"key": "city", "label": "City"},
-                                                {"key": "last_purchase", "label": "Last Purchase"}]
     assert client.put(f"/api/campaigns/{cid}/setup", json=SETUP).status_code == 409
 
     client.worker.tick()
     assert len(bolna.calls) == 2  # concurrency limit
-    assert bolna.calls[0][2] == {"customer_name": "Asha", "business_name": "Acme Solar",
-                                 "city": "Chennai", "last_purchase": "Inverter"}
-    assert bolna.calls[1][2]["last_purchase"] == ""
+    phone, data = bolna.calls[0]
+    assert phone == "+919876543210"
+    assert data["customer_name"] == "Asha" and data["business_name"] == "Acme Solar"
+    assert data["product_details"] == SETUP["product_details"]
+    assert data["sales_instructions"] == SETUP["sales_instructions"]
+    assert data["customer_details"] == "City: Chennai; Last Purchase: Inverter"
+    assert data["city"] == "Chennai"
+    assert bolna.calls[1][1]["customer_details"] == "City: Madurai"
 
     bolna.executions["exec-0"] = {
         "id": "exec-0", "status": "completed", "transcript": "assistant: hi\nuser: yes please",
@@ -69,7 +71,6 @@ def test_full_workflow(client, bolna, payments):
     assert by_name["Ravi"]["outcome"] == "no_answer"
     assert by_name["Meena"]["outcome"] == "no_conversation"
     assert data["stats"]["done"] == 3
-    assert bolna.deleted == ["agent-1"]  # agent removed once calling finished
 
     res = client.get(f"/api/campaigns/{cid}/export")
     assert res.status_code == 200
@@ -91,7 +92,6 @@ def test_stop_skips_pending(client, bolna, payments):
     leads = client.get(f"/api/campaigns/{cid}").json()["leads"]
     assert len(bolna.calls) == 2
     assert [l["status"] for l in leads] == ["busy", "busy", "skipped"]
-    assert bolna.deleted == ["agent-1"]
 
 
 def test_call_timeout(client, bolna, payments):

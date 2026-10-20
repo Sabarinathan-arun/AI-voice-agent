@@ -160,24 +160,11 @@ class CampaignWorker:
         if not self.store.leads_with_status(campaign["id"], IN_FLIGHT, limit=1) and not campaign.get("finished_at"):
             status = "completed" if campaign["status"] == "running" else campaign["status"]
             self.store.update_campaign(campaign["id"], status=status, finished_at=iso(now))
-            self.remove_agent(campaign)
-
-    def remove_agent(self, campaign: dict) -> None:
-        """The Bolna agent is only needed while calling; delete it so nothing is kept at Bolna's side either."""
-        if not campaign.get("bolna_agent_id"):
-            return
-        try:
-            self.bolna.delete_agent(campaign["bolna_agent_id"])
-            self.store.update_campaign(campaign["id"], bolna_agent_id=None)
-        except BolnaError as exc:
-            log.warning("could not delete Bolna agent %s: %s", campaign["bolna_agent_id"], exc)
 
     def dial(self, campaign: dict, lead: dict, now: datetime) -> None:
         self.store.update_lead(lead["id"], status="dialing", called_at=iso(now))
         try:
-            execution_id = self.bolna.start_call(
-                campaign["bolna_agent_id"], lead["phone"], call_user_data(campaign, lead)
-            )
+            execution_id = self.bolna.start_call(lead["phone"], call_user_data(campaign, lead))
         except BolnaError as exc:
             log.warning("call to lead %s failed: %s", lead["id"], exc)
             self.store.update_lead(lead["id"], status="failed", outcome="failed", error=str(exc)[:500])
