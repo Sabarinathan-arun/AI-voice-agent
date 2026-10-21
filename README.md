@@ -1,22 +1,25 @@
-# AI Sales Voice Agent — MVP
+# Intuvora — AI Sales Voice Agent
 
-A one-time-use web app: a business pays with Razorpay, describes its offer, uploads an Excel sheet of leads,
-and an AI voice agent ([Bolna](https://www.bolna.ai)) calls every lead. Results (call status, outcome,
-summary) appear live and download as Excel.
+Businesses create an account, top up a pay-as-you-go wallet, describe their offer, pick an AI voice and upload an
+Excel sheet of leads. An AI voice agent ([Bolna](https://www.bolna.ai)) calls every lead. Results (status, outcome,
+summary, transcript) appear live and download as a formatted Excel report.
 
-**Nothing is saved.** Each visit is a fresh campaign kept in server memory only — no database, no files,
-no login. Next time, the customer starts again.
+**What is stored:** customer accounts, wallet balances, top-ups, per-campaign usage totals and each customer's
+last-used business details (for auto-fill) — in a SQLite file (`data/accounts.db`).
+**What is never stored:** lead lists, phone numbers, transcripts and call results. They live in server memory only and
+are dropped 24 hours after the customer's last visit.
 
 ## Workflow
 
 | Step | What happens | Where |
 |---|---|---|
-| 1. Payment | `POST /api/campaigns` creates a campaign and a Razorpay Payment Link. After paying, Razorpay sends the customer back to the campaign page, and the server asks Razorpay whether the link is paid. | `app/payments.py` |
-| 2. Business details | Business name, description, product/offer, sales instructions, opening line, language. | `PUT /api/campaigns/{id}/setup` |
-| 3. Upload leads | `.xlsx` or `.csv` with name and phone columns. **Every other column** (city, company, last purchase…) is passed to the AI agent for that lead. Numbers are converted to +country format; duplicates and invalid rows are skipped. | `app/leads.py` |
-| 4. AI calling | Creates a Bolna agent for the campaign from the customer's business details, welcome message and language, then calls each lead with it, sending the lead's details as call variables. The agent is deleted when the calls finish. The worker calls up to `MAX_CONCURRENT_CALLS` leads at a time. | `app/bolna.py`, `app/worker.py` |
-| 5. Results | Status, outcome and summary per lead, refreshed every 4 seconds. | `GET /api/campaigns/{id}` |
-| 6. Export | Excel with the uploaded columns followed by the call results. | `GET /api/campaigns/{id}/export` |
+| 1. Account | Sign up / log in with email and password (session cookie, passwords hashed with scrypt). | `app/accounts.py`, `/login` |
+| 2. Wallet | Top up via a Razorpay Payment Link. On return the server asks Razorpay if it is paid and credits the wallet once. | `app/payments.py`, `/dashboard` |
+| 3. Business details | Business, offer, sales instructions, opening line, language and **AI voice**. Pre-filled from the last campaign. | `PUT /api/campaigns/{id}/setup` |
+| 4. Upload leads | `.xlsx` or `.csv` with name and phone columns. Every other column (city, product…) is passed to the AI for that lead. | `app/leads.py` |
+| 5. AI calling | Creates a Bolna agent from the campaign (script, welcome message, language, voice), calls up to `MAX_CONCURRENT_CALLS` leads at a time, and deletes the agent when done. | `app/bolna.py`, `app/worker.py` |
+| 6. Billing | Each answered call is charged per second at `PRICE_PER_MINUTE_PAISE` (₹10/min by default). Unanswered calls are free. If the balance drops below one minute, new calls pause and resume automatically after a top-up. | `app/worker.py` |
+| 7. Report | Excel with a **Summary** sheet (every campaign detail, outcome breakdown, talk time, cost), a formatted **Results** sheet and a **Transcripts** sheet. | `app/export.py` |
 
 ## Setup
 
@@ -30,54 +33,55 @@ python -m uvicorn app.main:create_app --factory
 # open http://localhost:8000
 ```
 
-The app refuses to start without the Razorpay keys and the Bolna API key. Use Razorpay **test** keys (`rzp_test_...`) for
-your first runs; Razorpay's redirect back to `localhost` works from your own browser.
+The app refuses to start without the Razorpay keys and the Bolna API key. Use Razorpay **test** keys (`rzp_test_...`)
+first; Razorpay's redirect back to `localhost` works from your own browser.
+
+### Pricing settings (`.env`)
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `PRICE_PER_MINUTE_PAISE` | `1000` | ₹10 per minute of answered calls, billed per second |
+| `MIN_TOPUP_PAISE` | `10000` | Smallest top-up, ₹100 |
+
+### AI voices
+
+Customers choose from the voices in `app/voices.json`. Add one entry per voice from your Bolna account:
+
+```json
+{
+  "id": "arjun",
+  "name": "Arjun",
+  "gender": "Male",
+  "description": "Confident, clear Indian English",
+  "provider": "elevenlabs",
+  "provider_config": {"voice": "Arjun", "voice_id": "<voice id from Bolna>", "model": "eleven_turbo_v2_5"},
+  "sample_url": ""
+}
+```
+
+`provider` and `provider_config` are copied into the agent's synthesizer, so use the values Bolna shows for that voice.
+`sample_url` (optional) is an audio file customers can play before choosing (e.g. `/static/voices/arjun.mp3`).
 
 ### Bolna
 
-Customers never see Bolna, and you never build agents by hand. When a customer clicks **Start calling**, the app
-creates a Bolna agent for that campaign from what the customer entered — sales script (business, product,
-instructions), welcome message and call language — calls the leads with it, and deletes it when the calls finish.
-
-1. Paid Bolna account (trial accounts can only call verified numbers), an outbound phone number, and your API key
-   in `.env` as `BOLNA_API_KEY`.
-2. `app/bolna_agent_template.json` holds the defaults every campaign agent starts from: LLM, voice (synthesizer),
-   transcriber and telephony provider. Check it against your Bolna account and the
-   [v2 agent API](https://www.bolna.ai/docs/api-reference/agent/v2/create). Pick a voice and transcriber that support
-   the languages you offer; the app sets the transcriber's `language` code from the customer's choice.
-3. Make one test call to your own number and confirm a summary and outcome come back. If agent creation fails, the
-   page shows Bolna's error message, which names the setting to fix in the template.
-
-Languages offered on the setup form are listed in `LANGUAGES` in `app/bolna.py`.
-
-### Razorpay
-
-1. Razorpay Dashboard → Account & Settings → API Keys: generate a key pair.
-2. Put both in `.env`, set `PRICE_AMOUNT` in paise (99900 = ₹999).
-3. Switch to live keys (`rzp_live_...`) after a full test run.
+1. Paid Bolna account (trial accounts can only call verified numbers), an outbound number, and `BOLNA_API_KEY`.
+2. `app/bolna_agent_template.json` holds the LLM, transcriber and telephony defaults for every campaign agent.
+3. The sales script (`build_system_prompt` in `app/bolna.py`) tells the AI how to sound human on the phone: short
+   turns, everyday words, one question at a time, reacting before moving on, following the customer's language mix.
+4. Make one test call to your own number and confirm the voice, summary and outcome.
 
 ### Going live
 
-Deploy with **https** and set `APP_BASE_URL` to that address. Each campaign agent then gets
-`https://<your-domain>/api/webhooks/bolna` as its webhook for faster results (the app only takes the call id from it
-and fetches the data from Bolna itself). Without https, the app polls Bolna every few seconds.
-
-Run **one** server process: sessions live in that process's memory, and a restart ends any campaign in progress.
+Deploy with **https** and set `APP_BASE_URL`. Session cookies are then marked secure, and each campaign agent gets
+`https://<your-domain>/api/webhooks/bolna` as its webhook. Run **one** server process; campaigns in progress live in
+that process's memory. Back up `data/accounts.db` — it holds customer wallets.
 
 ## Website
 
-- `app/static/index.html` — the Intuvora homepage (story, how it works, demo video, features, pricing, FAQ). Every
-  "Start a campaign" button opens Razorpay checkout. Price and lead limit are read from `.env`.
-- **Demo video:** set `DEMO_VIDEO_URL` near the bottom of `index.html` to a YouTube embed link
-  (`https://www.youtube.com/embed/VIDEO_ID`) or an MP4 placed in `app/static` (e.g. `/static/demo.mp4`).
-  Empty shows a "coming soon" card.
-- `app/static/campaign.html` — the customer's campaign dashboard. `app/static/style.css` styles both pages.
-
-## Outcomes
-
-`interested`, `not_interested`, `callback_requested`, `wrong_number`, `voicemail`, `no_conversation` come from Bolna's
-extraction (`extracted_data.outcome`). Otherwise the call status is used: `no_answer`, `busy`, `failed`, `cancelled`,
-`timed_out` (no final status within `CALL_TIMEOUT_MINUTES`), or `completed` / `no_conversation` by transcript.
+- `/` — homepage (`app/static/index.html`). Demo video: set `DEMO_VIDEO_URL` near the bottom of the file.
+- `/login` — log in / create account.
+- `/dashboard` — balance, top-up, new campaign, recent campaigns, usage & payments history.
+- `/campaign?id=…` — set up, upload, call, watch results, download the report.
 
 ## Tests
 
@@ -85,20 +89,21 @@ extraction (`extracted_data.outcome`). Otherwise the call status is used: `no_an
 python -m pytest -q
 ```
 
-Tests use stand-in Bolna and Razorpay clients defined in `tests/conftest.py`, so they need no keys and make no calls.
+Tests use stand-in Bolna and Razorpay clients (`tests/conftest.py`); no keys or calls needed.
 
 ## Project layout
 
 ```
 app/
   main.py        FastAPI routes (create_app factory)
-  config.py      settings from env / .env
-  store.py       in-memory session store (nothing written to disk)
-  payments.py    Razorpay Payment Links
-  bolna.py       Bolna API client, campaign agent builder, call languages
-  worker.py      call dispatching and result polling
-  leads.py       Excel/CSV lead parsing, extra columns, phone normalisation
-  export.py      results workbook (with formula-injection protection)
-  static/        index.html (pay), campaign.html (setup/upload/results)
+  accounts.py    accounts, sessions, wallet, top-ups, usage, saved business details (SQLite)
+  store.py       in-memory campaigns and leads (never written to disk)
+  payments.py    Razorpay Payment Links for top-ups
+  bolna.py       Bolna API client, sales script, voices, call languages
+  worker.py      call dispatching, result polling, per-second billing
+  leads.py       Excel/CSV lead parsing
+  export.py      formatted Excel report
+  voices.json    AI voices customers can choose
+  static/        index.html, login.html, dashboard.html, campaign.html, common.js, style.css
 tests/
 ```

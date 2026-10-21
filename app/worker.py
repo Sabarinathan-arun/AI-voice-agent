@@ -1,7 +1,8 @@
-"""Background worker: places calls and collects results from Bolna."""
+"""Background worker: places calls, collects results from Bolna and charges answered calls to the wallet."""
 
 import json
 import logging
+import math
 import re
 import threading
 from datetime import datetime, timedelta
@@ -107,11 +108,17 @@ def _outcome(status: str, extracted: dict, transcript: str | None) -> str:
     return "completed"
 
 
+def call_cost_paise(seconds: float, price_per_minute_paise: int) -> int:
+    """Per-second billing at the per-minute rate, rounded up to the next paisa."""
+    return math.ceil(seconds * price_per_minute_paise / 60) if seconds > 0 else 0
+
+
 class CampaignWorker:
-    def __init__(self, store: Store, bolna, settings):
+    def __init__(self, store: Store, bolna, settings, accounts):
         self.store = store
         self.bolna = bolna
         self.settings = settings
+        self.accounts = accounts
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._tick_lock = threading.Lock()
@@ -151,7 +158,11 @@ class CampaignWorker:
 
         in_flight = self.store.leads_with_status(campaign["id"], IN_FLIGHT)
         if campaign["status"] == "running":
-            free = self.settings.max_concurrent_calls - len(in_flight)
+            # Only start new calls while the wallet covers at least one minute; resume after a top-up.
+            low = self.accounts.balance(campaign["user_id"]) < self.settings.price_per_minute_paise
+            if low != campaign.get("low_balance"):
+                self.store.update_campaign(campaign["id"], low_balance=low)
+            free = 0 if low else self.settings.max_concurrent_calls - len(in_flight)
             if free > 0:
                 for lead in self.store.leads_with_status(campaign["id"], ("pending",), limit=free):
                     self.dial(campaign, lead, now)
@@ -200,6 +211,20 @@ class CampaignWorker:
     def apply_execution(self, lead: dict, execution: dict) -> None:
         fields = {k: v for k, v in parse_execution(execution).items() if v is not None}
         self.store.update_lead(lead["id"], **fields)
+        if fields.get("status") in TERMINAL_STATUSES:
+            self.bill(lead, fields.get("duration_seconds") or 0)
+
+    def bill(self, lead: dict, seconds: float) -> None:
+        """Charge an answered call once. Unanswered calls (0 seconds) are free."""
+        cost = call_cost_paise(seconds, self.settings.price_per_minute_paise)
+        if cost <= 0 or not self.store.claim_billing(lead["id"]):
+            return
+        campaign = self.store.get_campaign(lead["campaign_id"], touch=False)
+        if not campaign:
+            return
+        self.store.update_lead(lead["id"], cost_paise=cost)
+        self.accounts.charge_call(campaign["user_id"], campaign["id"], campaign["business_name"],
+                                  campaign["started_at"] or campaign["created_at"], math.ceil(seconds), cost)
 
     def handle_webhook(self, payload: dict) -> bool:
         """Bolna posts execution updates here. Only the id is trusted; data is re-fetched from Bolna."""

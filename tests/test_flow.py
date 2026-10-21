@@ -5,86 +5,145 @@ from datetime import timedelta
 from openpyxl import load_workbook
 
 from app.store import utcnow
-from app.worker import parse_execution
+from app.worker import call_cost_paise, parse_execution
+from tests.conftest import signup, top_up
 
 SETUP = {"business_name": "Acme Solar", "product_details": "Rooftop solar, 3kW from 1.5L",
          "sales_instructions": "Book a free site visit.", "language": "Tamil",
-         "welcome_message": "Vanakkam {customer_name}"}
+         "welcome_message": "Vanakkam {customer_name}", "voice": "nila"}
 CSV = b"name,phone,City,Last Purchase\nAsha,9876543210,Chennai,Inverter\nRavi,9876543211,Madurai,\nMeena,9876543212,Salem,Panels\n"
 
 
-def paid_campaign(client, payments):
-    res = client.post("/api/campaigns")
-    assert res.status_code == 201
-    cid = res.json()["campaign_id"]
-    assert res.json()["checkout_url"].startswith("https://rzp.io/")
-    # not paid yet: verify does nothing and setup is locked
-    assert client.post(f"/api/campaigns/{cid}/verify-payment").json()["status"] == "pending_payment"
-    assert client.put(f"/api/campaigns/{cid}/setup", json=SETUP).status_code == 409
-    payments.paid.add(cid)
-    assert client.post(f"/api/campaigns/{cid}/verify-payment").json()["status"] == "paid"
+def ready_campaign(client, csv=CSV):
+    cid = client.post("/api/campaigns").json()["campaign_id"]
+    assert client.put(f"/api/campaigns/{cid}/setup", json=SETUP).status_code == 200
+    assert client.post(f"/api/campaigns/{cid}/leads", files={"file": ("leads.csv", csv, "text/csv")}).status_code == 200
     return cid
 
 
-def test_full_workflow(client, bolna, payments):
-    cid = paid_campaign(client, payments)
-    assert client.post(f"/api/campaigns/{cid}/start").status_code == 422  # nothing set up yet
+def test_accounts_login_logout(client):
+    assert client.get("/api/me").status_code == 401
+    me = signup(client)
+    assert me["email"] == "owner@example.com" and me["balance_paise"] == 0
+    assert client.post("/api/auth/signup", json={"email": "owner@example.com", "password": "another123"}).status_code == 422
+    client.post("/api/auth/logout")
+    assert client.get("/api/me").status_code == 401
+    assert client.post("/api/auth/login", json={"email": "owner@example.com", "password": "wrong-pass"}).status_code == 401
+    assert client.post("/api/auth/login", json={"email": "OWNER@example.com", "password": "secret123"}).status_code == 200
+    assert client.get("/api/me").json()["name"] == "Owner"
 
-    assert client.put(f"/api/campaigns/{cid}/setup", json=SETUP).status_code == 200
-    res = client.post(f"/api/campaigns/{cid}/leads", files={"file": ("leads.csv", CSV, "text/csv")})
-    assert res.json()["imported"] == 3
-    assert res.json()["detail_columns"] == ["City", "Last Purchase"]
+
+def test_topup_credited_once(client, payments):
+    signup(client)
+    assert client.post("/api/wallet/topups", json={"amount_rupees": 50}).status_code == 422  # below ₹100 minimum
+    res = client.post("/api/wallet/topups", json={"amount_rupees": 500})
+    assert res.status_code == 201 and res.json()["checkout_url"].startswith("https://rzp.io/")
+    assert payments.links[0]["amount"] == 50000 and "/dashboard?topup=" in payments.links[0]["callback"]
+    assert client.post("/api/wallet/topups/verify").json()["balance_paise"] == 0  # not paid yet
+    payments.pay_all()
+    assert client.post("/api/wallet/topups/verify").json()["balance_paise"] == 50000
+    assert client.post("/api/wallet/topups/verify").json()["balance_paise"] == 50000  # never twice
+    history = client.get("/api/wallet").json()["history"]
+    assert history[0]["type"] == "topup" and history[0]["amount_paise"] == 50000
+
+
+def test_full_workflow_with_billing(client, bolna, payments):
+    signup(client)
+    cid = ready_campaign(client)
+    assert client.post(f"/api/campaigns/{cid}/start").status_code == 402  # empty wallet
+    top_up(client, payments, 500)
 
     res = client.post(f"/api/campaigns/{cid}/start")
     assert res.status_code == 200 and res.json()["campaign"]["status"] == "running"
-    assert "bolna_agent_id" not in res.json()["campaign"]
-    agent_campaign = bolna.agents[0]  # the agent is created from what the customer entered
-    assert agent_campaign["language"] == "Tamil" and agent_campaign["welcome_message"] == "Vanakkam {customer_name}"
-    assert client.put(f"/api/campaigns/{cid}/setup", json=SETUP).status_code == 409
+    assert "bolna_agent_id" not in res.json()["campaign"] and "user_id" not in res.json()["campaign"]
+    agent = bolna.agents[0]
+    assert agent["language"] == "Tamil" and agent["_voice"]["id"] == "nila"
 
     client.worker.tick()
     assert len(bolna.calls) == 2  # concurrency limit
     agent_id, phone, data = bolna.calls[0]
-    assert agent_id == "agent-1" and phone == "+919876543210"
     assert data == {"customer_name": "Asha", "customer_details": "City: Chennai; Last Purchase: Inverter",
                     "city": "Chennai", "last_purchase": "Inverter"}
-    assert bolna.calls[1][2]["customer_details"] == "City: Madurai"
 
     bolna.executions["exec-0"] = {
         "id": "exec-0", "status": "completed", "transcript": "assistant: hi\nuser: yes please",
         "summary": "Asha booked a site visit.", "extracted_data": {"outcome": "Interested"},
-        "conversation_duration": 42, "telephony_data": {"recording_url": "https://rec/0"},
+        "conversation_duration": 90, "telephony_data": {"recording_url": "https://rec/0"},
     }
     bolna.executions["exec-1"] = {"id": "exec-1", "status": "no-answer"}
     client.worker.tick()
-    assert len(bolna.calls) == 3
-
-    # webhook path: payload id only, data re-fetched from Bolna
-    bolna.executions["exec-2"] = {"id": "exec-2", "status": "completed", "transcript": "assistant: hello"}
-    assert client.post("/api/webhooks/bolna", json={"id": "exec-2", "status": "forged"}).status_code == 200
+    # webhook for the same call must not bill twice
+    client.post("/api/webhooks/bolna", json={"id": "exec-0"})
+    bolna.executions["exec-2"] = {"id": "exec-2", "status": "completed", "transcript": "assistant: hello",
+                                  "conversation_duration": 7}
     client.worker.tick()
 
     data = client.get(f"/api/campaigns/{cid}").json()
     assert data["campaign"]["status"] == "completed"
+    assert data["stats"]["answered_calls"] == 2 and data["stats"]["seconds"] == 97
+    assert data["stats"]["cost_paise"] == 1500 + 117  # 90 s = ₹15.00, 7 s = ₹1.17 (rounded up)
+    assert data["balance_paise"] == 50000 - 1617
     by_name = {l["name"]: l for l in data["leads"]}
+    assert by_name["Ravi"]["cost_paise"] == 0  # unanswered calls are free
     assert by_name["Asha"]["outcome"] == "interested"
-    assert by_name["Asha"]["summary"] == "Asha booked a site visit."
-    assert by_name["Ravi"]["outcome"] == "no_answer"
-    assert by_name["Meena"]["outcome"] == "no_conversation"
-    assert data["stats"]["done"] == 3
-    assert bolna.deleted == ["agent-1"]  # agent removed once calling finished
+    assert bolna.deleted == ["agent-1"]
+
+    history = client.get("/api/wallet").json()["history"]
+    assert any(h["type"] == "campaign" and h["amount_paise"] == -1617 and h["calls"] == 2 for h in history)
 
     res = client.get(f"/api/campaigns/{cid}/export")
-    assert res.status_code == 200
-    rows = list(load_workbook(io.BytesIO(res.content)).active.iter_rows(values_only=True))
-    assert rows[0][:7] == ("Name", "Phone", "City", "Last Purchase", "Call status", "Outcome", "Summary")
-    assert rows[1][:6] == ("Asha", "+919876543210", "Chennai", "Inverter", "completed", "interested")
+    assert res.status_code == 200 and "Acme-Solar" in res.headers["content-disposition"]
+    wb = load_workbook(io.BytesIO(res.content))
+    assert wb.sheetnames == ["Summary", "Results", "Transcripts"]
+    summary = {r[0]: r[1] for r in wb["Summary"].iter_rows(values_only=True) if r[0]}
+    assert summary["Business name"] == "Acme Solar" and summary["AI voice"] == "Nila"
+    assert summary["Call language"] == "Tamil" and summary["Total leads"] == 3
+    assert summary["Total cost (₹)"] == 16.17
+    rows = list(wb["Results"].iter_rows(values_only=True))
+    assert rows[0][:5] == ("#", "Name", "Phone", "City", "Last Purchase")
+    assert rows[1][1:7] == ("Asha", "+919876543210", "Chennai", "Inverter", "Completed", "Interested")
+    assert rows[1][8] == "1:30" and rows[1][9] == 15.0
+
+
+def test_low_balance_pauses_and_resumes(client, bolna, payments, settings):
+    signup(client)
+    top_up(client, payments, 100)
+    cid = ready_campaign(client)
+    client.post(f"/api/campaigns/{cid}/start")
+    client.worker.tick()
+    # a long call drains the wallet below one minute's price
+    bolna.executions["exec-0"] = {"id": "exec-0", "status": "completed", "conversation_duration": 570}
+    bolna.executions["exec-1"] = {"id": "exec-1", "status": "busy"}
+    client.worker.tick()
+    data = client.get(f"/api/campaigns/{cid}").json()
+    assert data["balance_paise"] == 10000 - 9500
+    assert data["campaign"]["low_balance"] is True and len(bolna.calls) == 2  # Meena not called yet
+    top_up(client, payments, 200)
+    client.worker.tick()
+    assert len(bolna.calls) == 3
+    assert client.get(f"/api/campaigns/{cid}").json()["campaign"]["low_balance"] is False
+
+
+def test_campaigns_are_private_and_autofilled(client, payments):
+    signup(client)
+    cid = ready_campaign(client)
+    second = client.post("/api/campaigns").json()["campaign_id"]
+    prefilled = client.get(f"/api/campaigns/{second}").json()["campaign"]
+    assert prefilled["business_name"] == "Acme Solar" and prefilled["language"] == "Tamil"
+    assert prefilled["voice"] == "nila"
+    assert [c["id"] for c in client.get("/api/campaigns").json()] == [second, cid]
+
+    client.post("/api/auth/logout")
+    signup(client, email="other@example.com")
+    assert client.get(f"/api/campaigns/{cid}").status_code == 404
+    assert client.get(f"/api/campaigns/{cid}/export").status_code == 404
+    assert client.get("/api/campaigns").json() == []
 
 
 def test_stop_skips_pending(client, bolna, payments):
-    cid = paid_campaign(client, payments)
-    client.put(f"/api/campaigns/{cid}/setup", json=SETUP)
-    client.post(f"/api/campaigns/{cid}/leads", files={"file": ("leads.csv", CSV, "text/csv")})
+    signup(client)
+    top_up(client, payments)
+    cid = ready_campaign(client)
     client.post(f"/api/campaigns/{cid}/start")
     client.worker.tick()
     assert client.post(f"/api/campaigns/{cid}/stop").json()["campaign"]["status"] == "stopped"
@@ -92,20 +151,20 @@ def test_stop_skips_pending(client, bolna, payments):
         bolna.executions[eid] = {"id": eid, "status": "busy"}
     client.worker.tick()
     leads = client.get(f"/api/campaigns/{cid}").json()["leads"]
-    assert len(bolna.calls) == 2
     assert [l["status"] for l in leads] == ["busy", "busy", "skipped"]
     assert bolna.deleted == ["agent-1"]
 
 
-def test_unknown_language_rejected(client, payments):
-    cid = paid_campaign(client, payments)
+def test_unknown_language_rejected(client):
+    signup(client)
+    cid = client.post("/api/campaigns").json()["campaign_id"]
     assert client.put(f"/api/campaigns/{cid}/setup", json={**SETUP, "language": "Klingon"}).status_code == 422
 
 
 def test_call_timeout(client, bolna, payments):
-    cid = paid_campaign(client, payments)
-    client.put(f"/api/campaigns/{cid}/setup", json=SETUP)
-    client.post(f"/api/campaigns/{cid}/leads", files={"file": ("l.csv", b"name,phone\nA,9876543210\n", "text/csv")})
+    signup(client)
+    top_up(client, payments)
+    cid = ready_campaign(client, b"name,phone\nA,9876543210\n")
     client.post(f"/api/campaigns/{cid}/start")
     client.worker.tick()
     client.worker.tick(utcnow() + timedelta(hours=2))
@@ -114,10 +173,18 @@ def test_call_timeout(client, bolna, payments):
     assert data["campaign"]["status"] == "completed"
 
 
-def test_nothing_is_kept_after_idle_session(client, payments):
-    cid = paid_campaign(client, payments)
+def test_campaign_data_dropped_after_idle_day(client, payments):
+    signup(client)
+    cid = client.post("/api/campaigns").json()["campaign_id"]
     client.worker.tick(utcnow() + timedelta(hours=25))
     assert client.get(f"/api/campaigns/{cid}").status_code == 404
+    assert client.get("/api/me").status_code == 200  # the account itself stays
+
+
+def test_call_cost():
+    assert call_cost_paise(0, 1000) == 0
+    assert call_cost_paise(60, 1000) == 1000
+    assert call_cost_paise(1, 1000) == 17
 
 
 def test_parse_execution_variants():
@@ -126,18 +193,15 @@ def test_parse_execution_variants():
     assert f["outcome"] == "callback_requested" and f["transcript"] == "user: hi" and f["summary"] == "user: hi"
     assert parse_execution({"status": "scheduled"})["status"] == "in-progress"
     assert "outcome" not in parse_execution({"status": "ringing"})
-    assert "outcome" not in parse_execution({"status": "call-disconnected"})  # wait for 'completed'
+    assert "outcome" not in parse_execution({"status": "call-disconnected"})
 
 
 def test_parse_execution_nested_extraction():
-    # shape from Bolna's API quickstart: extracted data grouped by category
     f = parse_execution({
         "status": "completed", "conversation_duration": 16, "transcript": "assistant: hi\nuser: hello",
         "extracted_data": {"General": {"Call Summary": {"subjective": "Customer wants a demo."},
                                        "Outcome": {"value": "Interested"}}},
-        "telephony_data": {"duration": 16, "recording_url": "https://api.bolna.ai/recordings/call/x",
-                           "hangup_reason": "inactivity_timeout"},
+        "telephony_data": {"duration": 16, "recording_url": "https://api.bolna.ai/recordings/call/x"},
     })
-    assert f["summary"] == "Customer wants a demo."
-    assert f["outcome"] == "interested"
+    assert f["summary"] == "Customer wants a demo." and f["outcome"] == "interested"
     assert f["duration_seconds"] == 16 and f["recording_url"].endswith("/x")

@@ -16,7 +16,7 @@
               "family": "openai",
               "model": "gpt-4o-mini",
               "max_tokens": 150,
-              "temperature": 0.2,
+              "temperature": 0.5,
               "request_json": true
             }
           },
@@ -52,7 +52,7 @@
           "call_terminate": 300,
           "voicemail": true,
           "ambient_noise": false,
-          "backchanneling": false
+          "backchanneling": true
         }
       }
     ]

@@ -1,19 +1,23 @@
-"""FastAPI app: payment -> sales setup -> lead upload -> AI calls -> results -> export.
+"""FastAPI app: login -> wallet top-up -> sales setup -> lead upload -> AI calls -> results -> export.
 
-One-time use: each visit is a fresh campaign held in memory only. Nothing is written to disk.
+Accounts, wallet and usage history are kept in SQLite (accounts.py). Each campaign's leads and results live in
+memory only and are dropped 24 hours after the last visit (store.py). Calls are billed per second at the
+per-minute rate; unanswered calls are free.
 """
 
 import logging
+import re
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from .bolna import LANGUAGES, BolnaError, make_bolna_client
+from .accounts import AccountError, Accounts
+from .bolna import LANGUAGES, BolnaError, load_voices, make_bolna_client
 from .config import Settings, load_settings
 from .export import build_results_workbook
 from .leads import LeadFileError, parse_leads
@@ -24,6 +28,24 @@ from .worker import CampaignWorker
 log = logging.getLogger(__name__)
 STATIC = Path(__file__).parent / "static"
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+SESSION_COOKIE = "intuvora_session"
+PROFILE_FIELDS = ("business_name", "business_description", "product_details", "sales_instructions",
+                  "welcome_message", "language", "voice")
+
+
+class SignupIn(BaseModel):
+    name: str = Field(default="", max_length=100)
+    email: str = Field(min_length=3, max_length=200)
+    password: str = Field(min_length=8, max_length=200)
+
+
+class LoginIn(BaseModel):
+    email: str = Field(min_length=3, max_length=200)
+    password: str = Field(min_length=1, max_length=200)
+
+
+class TopupIn(BaseModel):
+    amount_rupees: int = Field(gt=0, le=200000)
 
 
 class SetupIn(BaseModel):
@@ -33,6 +55,7 @@ class SetupIn(BaseModel):
     sales_instructions: str = Field(min_length=1, max_length=5000)
     welcome_message: str = Field(default="", max_length=500)
     language: str = Field(default="English", max_length=50)
+    voice: str = Field(default="", max_length=100)
 
     @field_validator("language")
     @classmethod
@@ -45,9 +68,15 @@ class SetupIn(BaseModel):
 def create_app(settings: Settings | None = None, bolna=None, payments=None, run_worker: bool = True) -> FastAPI:
     settings = settings or load_settings()
     store = Store()
+    accounts = Accounts(settings.database_path)
     bolna = bolna or make_bolna_client(settings)
     payments = payments or make_payment_provider(settings)
-    worker = CampaignWorker(store, bolna, settings)
+    voices = load_voices(settings.voices_path)
+    if not voices:
+        raise RuntimeError(f"No voices configured in {settings.voices_path}")
+    voices_by_id = {v["id"]: v for v in voices}
+    worker = CampaignWorker(store, bolna, settings, accounts)
+    secure_cookie = settings.app_base_url.startswith("https://")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -57,20 +86,40 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, run_
         if run_worker:
             worker.stop()
 
-    app = FastAPI(title="AI Sales Voice Agent", lifespan=lifespan)
-    app.state.settings, app.state.store, app.state.worker = settings, store, worker
+    app = FastAPI(title="Intuvora AI Sales Agent", lifespan=lifespan)
+    app.state.settings, app.state.store, app.state.worker, app.state.accounts = settings, store, worker, accounts
 
     # --- helpers ---------------------------------------------------------------
 
-    def get_campaign_or_404(campaign_id: str) -> dict:
+    def current_user(request: Request) -> dict:
+        user = accounts.user_for_session(request.cookies.get(SESSION_COOKIE))
+        if not user:
+            raise HTTPException(401, "Please log in.")
+        return user
+
+    def start_session(response: Response, user: dict) -> None:
+        response.set_cookie(SESSION_COOKIE, accounts.create_session(user["id"]), max_age=30 * 24 * 3600,
+                            httponly=True, samesite="lax", secure=secure_cookie)
+
+    def get_campaign_or_404(campaign_id: str, user: dict) -> dict:
         campaign = store.get_campaign(campaign_id)
-        if not campaign:
-            raise HTTPException(404, "Campaign not found. Sessions are not saved; please start again.")
+        if not campaign or campaign["user_id"] != user["id"]:
+            raise HTTPException(404, "Campaign not found. Campaign data is kept for 24 hours only.")
         return campaign
 
     def require_status(campaign: dict, *statuses: str) -> None:
         if campaign["status"] not in statuses:
             raise HTTPException(409, f"Not allowed while campaign is '{campaign['status']}'.")
+
+    def me(user: dict) -> dict:
+        return {"id": user["id"], "name": user["name"], "email": user["email"],
+                "balance_paise": accounts.balance(user["id"])}
+
+    def campaign_summary(campaign: dict) -> dict:
+        leads = store.get_leads(campaign["id"])
+        return {"id": campaign["id"], "business_name": campaign["business_name"], "status": campaign["status"],
+                "created_at": campaign["created_at"], "leads": len(leads),
+                "done": sum(1 for l in leads if l["outcome"] or l["status"] == "skipped")}
 
     def serialize(campaign: dict) -> dict:
         leads = store.get_leads(campaign["id"])
@@ -79,13 +128,17 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, run_
             key = lead["outcome"] or lead["status"]
             counts[key] = counts.get(key, 0) + 1
         done = sum(1 for l in leads if l["outcome"] or l["status"] == "skipped")
-        public = {k: v for k, v in campaign.items() if k not in ("payment_ref", "bolna_agent_id", "last_activity")}
+        usage = accounts.campaign_usage(campaign["id"])
+        public = {k: v for k, v in campaign.items() if k not in ("bolna_agent_id", "last_activity", "user_id")}
         return {
             "campaign": public,
-            "stats": {"total": len(leads), "done": done, "by_outcome": counts},
+            "stats": {"total": len(leads), "done": done, "by_outcome": counts, "answered_calls": usage["calls"],
+                      "seconds": usage["seconds"], "cost_paise": usage["amount_paise"]},
+            "balance_paise": accounts.balance(campaign["user_id"]),
             "leads": [
                 {k: l[k] for k in ("id", "row_number", "name", "phone", "details", "status", "outcome", "summary",
-                                   "duration_seconds", "recording_url", "transcript", "error", "called_at")}
+                                   "duration_seconds", "recording_url", "transcript", "error", "called_at",
+                                   "cost_paise")}
                 for l in leads
             ],
         }
@@ -96,6 +149,14 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, run_
     def index():
         return FileResponse(STATIC / "index.html")
 
+    @app.get("/login", include_in_schema=False)
+    def login_page():
+        return FileResponse(STATIC / "login.html")
+
+    @app.get("/dashboard", include_in_schema=False)
+    def dashboard_page():
+        return FileResponse(STATIC / "dashboard.html")
+
     @app.get("/campaign", include_in_schema=False)
     def campaign_page():
         return FileResponse(STATIC / "campaign.html")
@@ -105,54 +166,108 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, run_
     @app.get("/api/config")
     def public_config():
         return {
-            "price_amount": settings.price_amount,
             "price_currency": settings.price_currency,
+            "price_per_minute_paise": settings.price_per_minute_paise,
+            "min_topup_paise": settings.min_topup_paise,
             "max_leads": settings.max_leads_per_campaign,
             "languages": list(LANGUAGES),
         }
 
-    # --- 1. payment --------------------------------------------------------------
+    @app.get("/api/voices")
+    def list_voices():
+        return [{k: v.get(k, "") for k in ("id", "name", "gender", "description", "sample_url")} for v in voices]
 
-    @app.post("/api/campaigns", status_code=201)
-    def create_campaign():
-        campaign_id = secrets.token_urlsafe(18)
-        store.create_campaign(campaign_id)
+    # --- accounts ----------------------------------------------------------------
+
+    @app.post("/api/auth/signup", status_code=201)
+    def signup(body: SignupIn, response: Response):
         try:
-            checkout_url, payment_ref = payments.create_checkout(campaign_id)
+            user = accounts.create_user(body.email, body.name, body.password)
+        except AccountError as exc:
+            raise HTTPException(422, str(exc))
+        start_session(response, user)
+        return me(user)
+
+    @app.post("/api/auth/login")
+    def login(body: LoginIn, response: Response):
+        user = accounts.authenticate(body.email, body.password)
+        if not user:
+            raise HTTPException(401, "Wrong email or password.")
+        start_session(response, user)
+        return me(user)
+
+    @app.post("/api/auth/logout")
+    def logout(request: Request, response: Response):
+        accounts.delete_session(request.cookies.get(SESSION_COOKIE))
+        response.delete_cookie(SESSION_COOKIE)
+        return {"ok": True}
+
+    @app.get("/api/me")
+    def get_me(user: dict = Depends(current_user)):
+        return me(user)
+
+    # --- wallet --------------------------------------------------------------------
+
+    @app.get("/api/wallet")
+    def wallet(user: dict = Depends(current_user)):
+        return {"balance_paise": accounts.balance(user["id"]), "history": accounts.history(user["id"])}
+
+    @app.post("/api/wallet/topups", status_code=201)
+    def create_topup(body: TopupIn, user: dict = Depends(current_user)):
+        amount = body.amount_rupees * 100
+        if amount < settings.min_topup_paise:
+            raise HTTPException(422, f"Minimum top-up is ₹{settings.min_topup_paise // 100}.")
+        topup_id = accounts.create_topup(user["id"], amount)
+        try:
+            url, ref = payments.create_checkout(topup_id, amount, "Intuvora wallet top-up",
+                                                f"{settings.app_base_url}/dashboard?topup={topup_id}")
         except PaymentError as exc:
             raise HTTPException(502, str(exc))
-        store.update_campaign(campaign_id, payment_ref=payment_ref)
-        return {"campaign_id": campaign_id, "checkout_url": checkout_url}
+        accounts.set_topup_payment_ref(topup_id, ref)
+        return {"checkout_url": url}
 
-    @app.post("/api/campaigns/{campaign_id}/verify-payment")
-    def verify_payment(campaign_id: str):
-        campaign = get_campaign_or_404(campaign_id)
-        if campaign["status"] == "pending_payment" and campaign["payment_ref"]:
-            if payments.is_paid(campaign["payment_ref"], campaign_id):
-                store.mark_paid(campaign_id)
-        return {"status": store.get_campaign(campaign_id)["status"]}
+    @app.post("/api/wallet/topups/verify")
+    def verify_topups(user: dict = Depends(current_user)):
+        """Credit any of this user's top-ups that Razorpay reports as paid (safe to call repeatedly)."""
+        credited = 0
+        for topup in accounts.pending_topups(user["id"]):
+            if payments.is_paid(topup["payment_ref"], topup["id"]) and accounts.credit_topup(topup["id"]):
+                credited += topup["amount_paise"]
+        return {"credited_paise": credited, "balance_paise": accounts.balance(user["id"])}
 
-    # --- campaign state ----------------------------------------------------------
+    # --- campaigns -----------------------------------------------------------------
+
+    @app.get("/api/campaigns")
+    def list_campaigns(user: dict = Depends(current_user)):
+        return [campaign_summary(c) for c in store.campaigns_for_user(user["id"])]
+
+    @app.post("/api/campaigns", status_code=201)
+    def create_campaign(user: dict = Depends(current_user)):
+        campaign_id = secrets.token_urlsafe(18)
+        profile = accounts.get_profile(user["id"])  # auto-fill the last business details used
+        prefill = {k: profile[k] for k in PROFILE_FIELDS if profile.get(k)}
+        store.create_campaign(campaign_id, user["id"], prefill)
+        return {"campaign_id": campaign_id}
 
     @app.get("/api/campaigns/{campaign_id}")
-    def get_campaign(campaign_id: str):
-        return serialize(get_campaign_or_404(campaign_id))
-
-    # --- 2. sales setup ----------------------------------------------------------
+    def get_campaign(campaign_id: str, user: dict = Depends(current_user)):
+        return serialize(get_campaign_or_404(campaign_id, user))
 
     @app.put("/api/campaigns/{campaign_id}/setup")
-    def save_setup(campaign_id: str, body: SetupIn):
-        campaign = get_campaign_or_404(campaign_id)
-        require_status(campaign, "paid")
-        store.update_campaign(campaign_id, **body.model_dump())
+    def save_setup(campaign_id: str, body: SetupIn, user: dict = Depends(current_user)):
+        campaign = get_campaign_or_404(campaign_id, user)
+        require_status(campaign, "setup")
+        data = body.model_dump()
+        if data["voice"] not in voices_by_id:
+            data["voice"] = voices[0]["id"]
+        store.update_campaign(campaign_id, **data)
+        accounts.save_profile(user["id"], {k: data[k] for k in PROFILE_FIELDS})
         return serialize(store.get_campaign(campaign_id))
 
-    # --- 3. lead upload ----------------------------------------------------------
-
     @app.post("/api/campaigns/{campaign_id}/leads")
-    async def upload_leads(campaign_id: str, file: UploadFile = File(...)):
-        campaign = get_campaign_or_404(campaign_id)
-        require_status(campaign, "paid")
+    async def upload_leads(campaign_id: str, file: UploadFile = File(...), user: dict = Depends(current_user)):
+        campaign = get_campaign_or_404(campaign_id, user)
+        require_status(campaign, "setup")
         content = await file.read(MAX_UPLOAD_BYTES + 1)
         if len(content) > MAX_UPLOAD_BYTES:
             raise HTTPException(413, "File too large (max 5 MB).")
@@ -162,35 +277,37 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, run_
         except LeadFileError as exc:
             raise HTTPException(422, str(exc))
         store.replace_leads(campaign_id, result.leads)
-        store.update_campaign(campaign_id, detail_fields=result.detail_fields)
+        store.update_campaign(campaign_id, detail_fields=result.detail_fields, lead_file=file.filename)
         return {"imported": len(result.leads), "rejected": result.errors[:100],
                 "rejected_count": len(result.errors),
                 "detail_columns": [f["label"] for f in result.detail_fields]}
 
-    # --- 4. AI calling -----------------------------------------------------------
-
     @app.post("/api/campaigns/{campaign_id}/start")
-    def start_campaign(campaign_id: str):
-        campaign = get_campaign_or_404(campaign_id)
-        require_status(campaign, "paid")
+    def start_campaign(campaign_id: str, user: dict = Depends(current_user)):
+        campaign = get_campaign_or_404(campaign_id, user)
+        require_status(campaign, "setup")
         if not (campaign["business_name"] and campaign["product_details"] and campaign["sales_instructions"]):
             raise HTTPException(422, "Complete the sales setup first.")
         if not store.get_leads(campaign_id):
             raise HTTPException(422, "Upload leads first.")
+        if accounts.balance(user["id"]) < settings.price_per_minute_paise:
+            raise HTTPException(402, "Your wallet balance is too low. Please top up to start calling.")
         webhook_url = f"{settings.app_base_url}/api/webhooks/bolna"
         if not settings.app_base_url.startswith("https://"):
             webhook_url = None  # Bolna cannot reach a local URL; results are polled instead
+        voice = voices_by_id.get(campaign.get("voice") or "", voices[0])
         try:
-            agent_id = bolna.create_agent(campaign, webhook_url)
+            agent_id = bolna.create_agent(campaign, webhook_url, voice)
         except (BolnaError, OSError, ValueError) as exc:
             log.exception("agent creation failed")
             raise HTTPException(502, f"Could not create the voice agent: {exc}")
-        store.update_campaign(campaign_id, bolna_agent_id=agent_id, status="running", started_at=iso(utcnow()))
+        store.update_campaign(campaign_id, bolna_agent_id=agent_id, voice=voice["id"], status="running",
+                              started_at=iso(utcnow()))
         return serialize(store.get_campaign(campaign_id))
 
     @app.post("/api/campaigns/{campaign_id}/stop")
-    def stop_campaign(campaign_id: str):
-        campaign = get_campaign_or_404(campaign_id)
+    def stop_campaign(campaign_id: str, user: dict = Depends(current_user)):
+        campaign = get_campaign_or_404(campaign_id, user)
         require_status(campaign, "running")
         store.skip_pending_leads(campaign_id)
         store.update_campaign(campaign_id, status="stopped")
@@ -206,16 +323,18 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, run_
             worker.handle_webhook(payload)
         return {"received": True}
 
-    # --- 5. export ---------------------------------------------------------------
-
     @app.get("/api/campaigns/{campaign_id}/export")
-    def export_results(campaign_id: str):
-        campaign = get_campaign_or_404(campaign_id)
-        data = build_results_workbook(campaign, store.get_leads(campaign_id))
+    def export_results(campaign_id: str, user: dict = Depends(current_user)):
+        campaign = get_campaign_or_404(campaign_id, user)
+        voice = voices_by_id.get(campaign.get("voice") or "")
+        data = build_results_workbook(campaign, store.get_leads(campaign_id), accounts.campaign_usage(campaign_id),
+                                      voice_name=voice["name"] if voice else "",
+                                      price_per_minute_paise=settings.price_per_minute_paise)
+        name = re.sub(r"[^A-Za-z0-9]+", "-", campaign.get("business_name") or "campaign").strip("-")[:40] or "campaign"
         return Response(
             data,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f'attachment; filename="call-results-{campaign_id[:8]}.xlsx"'},
+            headers={"Content-Disposition": f'attachment; filename="{name}-call-results.xlsx"'},
         )
 
     return app

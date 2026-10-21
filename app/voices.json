@@ -1,0 +1,15 @@
+[
+  {
+    "id": "nila",
+    "name": "Nila",
+    "gender": "Female",
+    "description": "Warm and friendly Indian voice",
+    "provider": "elevenlabs",
+    "provider_config": {
+      "voice": "Nila",
+      "voice_id": "V9LCAAi4tTlqe9JadbCo",
+      "model": "eleven_turbo_v2_5"
+    },
+    "sample_url": ""
+  }
+]

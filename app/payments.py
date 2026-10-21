@@ -1,7 +1,7 @@
 """Razorpay payments via Payment Links: Razorpay hosts the payment page (UPI, cards, netbanking, wallets).
 
-Flow: create a payment link for the campaign -> customer pays on Razorpay -> Razorpay redirects back
-to the campaign page -> the server asks Razorpay whether that link is paid.
+Used for wallet top-ups: create a payment link -> customer pays on Razorpay -> Razorpay redirects back to the
+dashboard -> the server asks Razorpay whether that link is paid, then credits the wallet once.
 """
 
 import httpx
@@ -24,14 +24,14 @@ class RazorpayPayments:
             base_url=RAZORPAY_API, auth=(settings.razorpay_key_id, settings.razorpay_key_secret), timeout=30
         )
 
-    def create_checkout(self, campaign_id: str) -> tuple[str, str]:
+    def create_checkout(self, reference_id: str, amount_paise: int, description: str, callback_url: str) -> tuple[str, str]:
         """Return (payment_url, payment_link_id)."""
         body = {
-            "amount": self.settings.price_amount,
+            "amount": amount_paise,
             "currency": self.settings.price_currency.upper(),
-            "description": self.settings.product_name,
-            "reference_id": campaign_id,
-            "callback_url": f"{self.settings.app_base_url}/campaign?id={campaign_id}",
+            "description": description,
+            "reference_id": reference_id,
+            "callback_url": callback_url,
             "callback_method": "get",
         }
         try:
@@ -43,7 +43,7 @@ class RazorpayPayments:
         link = resp.json()
         return link["short_url"], link["id"]
 
-    def is_paid(self, payment_link_id: str, campaign_id: str) -> bool:
+    def is_paid(self, payment_link_id: str, reference_id: str) -> bool:
         """Ask Razorpay directly; never trust the redirect's query string on its own."""
         try:
             resp = self._http.get(f"/payment_links/{payment_link_id}")
@@ -52,7 +52,7 @@ class RazorpayPayments:
         if resp.status_code >= 400:
             return False
         link = resp.json()
-        return link.get("status") == "paid" and link.get("reference_id") == campaign_id
+        return link.get("status") == "paid" and link.get("reference_id") == reference_id
 
 
 def make_payment_provider(settings: Settings):

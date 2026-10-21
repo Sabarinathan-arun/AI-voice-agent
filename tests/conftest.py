@@ -13,8 +13,8 @@ class FakeBolna:
     def __init__(self):
         self.agents, self.deleted, self.calls, self.executions = [], [], [], {}
 
-    def create_agent(self, campaign, webhook_url):
-        self.agents.append(campaign)
+    def create_agent(self, campaign, webhook_url, voice=None):
+        self.agents.append({**campaign, "_voice": voice})
         return "agent-1"
 
     def delete_agent(self, agent_id):
@@ -32,18 +32,25 @@ class FakeBolna:
 
 class FakeRazorpay:
     def __init__(self):
-        self.paid: set[str] = set()
+        self.paid: set[str] = set()   # reference ids marked as paid
+        self.links: list[dict] = []
 
-    def create_checkout(self, campaign_id):
-        return f"https://rzp.io/i/{campaign_id}", f"plink_{campaign_id}"
+    def create_checkout(self, reference_id, amount_paise, description, callback_url):
+        self.links.append({"ref": reference_id, "amount": amount_paise, "callback": callback_url})
+        return f"https://rzp.io/i/{reference_id}", f"plink_{reference_id}"
 
-    def is_paid(self, payment_link_id, campaign_id):
-        return payment_link_id == f"plink_{campaign_id}" and campaign_id in self.paid
+    def is_paid(self, payment_link_id, reference_id):
+        return payment_link_id == f"plink_{reference_id}" and reference_id in self.paid
+
+    def pay_all(self):
+        self.paid.update(link["ref"] for link in self.links)
 
 
 @pytest.fixture
-def settings():
-    return dataclasses.replace(load_settings(), max_concurrent_calls=2, app_base_url="http://testserver")
+def settings(tmp_path):
+    return dataclasses.replace(load_settings(), max_concurrent_calls=2, app_base_url="http://testserver",
+                               database_path=str(tmp_path / "accounts.db"), price_per_minute_paise=1000,
+                               min_topup_paise=10000)
 
 
 @pytest.fixture
@@ -62,4 +69,17 @@ def client(settings, bolna, payments):
     with TestClient(app) as c:
         c.worker = app.state.worker
         c.store = app.state.store
+        c.accounts = app.state.accounts
         yield c
+
+
+def signup(client, email="owner@example.com", password="secret123"):
+    res = client.post("/api/auth/signup", json={"name": "Owner", "email": email, "password": password})
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+def top_up(client, payments, rupees=500):
+    assert client.post("/api/wallet/topups", json={"amount_rupees": rupees}).status_code == 201
+    payments.pay_all()
+    return client.post("/api/wallet/topups/verify").json()

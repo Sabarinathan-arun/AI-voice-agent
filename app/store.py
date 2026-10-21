@@ -1,4 +1,5 @@
-"""In-memory session store. Nothing is written to disk: a campaign lives only while the server runs.
+"""In-memory campaign store. Lead lists and call results are never written to disk: a campaign lives only
+while the server runs. (Accounts and wallet balances are in accounts.py.)
 
 Finished sessions are dropped from memory after a while so the server does not grow forever.
 """
@@ -30,32 +31,34 @@ class Store:
 
     # --- campaigns -----------------------------------------------------------
 
-    def create_campaign(self, campaign_id: str) -> None:
+    def create_campaign(self, campaign_id: str, user_id: str, prefill: dict | None = None) -> None:
         with self._lock:
             self._campaigns[campaign_id] = {
                 "id": campaign_id,
-                "status": "pending_payment",  # pending_payment | paid | running | completed | stopped
+                "user_id": user_id,
+                "status": "setup",  # setup | running | completed | stopped
                 "created_at": iso(utcnow()),
-                "paid_at": None,
-                "payment_ref": None,
                 "business_name": None,
                 "business_description": None,
                 "product_details": None,
                 "sales_instructions": None,
                 "welcome_message": None,
                 "language": None,
-                "detail_fields": [],
-                "bolna_agent_id": None,  # extra Excel columns: [{"key": "city", "label": "City"}, ...]
+                "voice": None,
+                "detail_fields": [],  # extra Excel columns: [{"key": "city", "label": "City"}, ...]
+                "bolna_agent_id": None,
+                "low_balance": False,  # calling paused until the wallet is topped up
                 "started_at": None,
                 "finished_at": None,
                 "last_activity": utcnow(),
             }
+            self._campaigns[campaign_id].update(prefill or {})
             self._leads[campaign_id] = []
 
-    def get_campaign(self, campaign_id: str) -> dict | None:
+    def get_campaign(self, campaign_id: str, touch: bool = True) -> dict | None:
         with self._lock:
             campaign = self._campaigns.get(campaign_id)
-            if campaign:
+            if campaign and touch:
                 self._touch(campaign)
             return copy.deepcopy(campaign)
 
@@ -66,13 +69,10 @@ class Store:
                 campaign.update(fields)
                 self._touch(campaign)
 
-    def mark_paid(self, campaign_id: str) -> bool:
+    def campaigns_for_user(self, user_id: str) -> list[dict]:
         with self._lock:
-            campaign = self._campaigns.get(campaign_id)
-            if not campaign or campaign["status"] != "pending_payment":
-                return False
-            campaign.update(status="paid", paid_at=iso(utcnow()))
-            return True
+            # newest first (dicts keep insertion order)
+            return [copy.deepcopy(c) for c in reversed(self._campaigns.values()) if c["user_id"] == user_id]
 
     def campaigns_with_status(self, *statuses: str) -> list[dict]:
         with self._lock:
@@ -101,6 +101,7 @@ class Store:
                     "status": "pending", "execution_id": None, "outcome": None, "summary": None,
                     "transcript": None, "duration_seconds": None, "recording_url": None,
                     "extracted_data": None, "error": None, "called_at": None,
+                    "billed": False, "cost_paise": 0,
                 })
                 self._next_lead_id += 1
             self._leads[campaign_id] = rows
@@ -129,6 +130,18 @@ class Store:
                     if lead["id"] == lead_id:
                         lead.update(fields)
                         return
+
+    def claim_billing(self, lead_id: int) -> bool:
+        """Mark a lead's call as billed; True only the first time (webhook and polling may both see it)."""
+        with self._lock:
+            for leads in self._leads.values():
+                for lead in leads:
+                    if lead["id"] == lead_id:
+                        if lead["billed"]:
+                            return False
+                        lead["billed"] = True
+                        return True
+            return False
 
     def skip_pending_leads(self, campaign_id: str) -> None:
         with self._lock:

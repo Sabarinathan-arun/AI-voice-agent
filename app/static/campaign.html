@@ -14,11 +14,15 @@
 
 <header class="site-header scrolled">
   <div class="container nav">
-    <a class="brand" href="/" aria-label="Intuvora home">
+    <a class="brand" href="/dashboard" aria-label="Intuvora dashboard">
       <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#5b4bff"/><rect x="8" y="13" width="3" height="6" rx="1.5" fill="#fff"/><rect x="13" y="9" width="3" height="14" rx="1.5" fill="#fff"/><rect x="18" y="11" width="3" height="10" rx="1.5" fill="#fff"/><rect x="23" y="14" width="3" height="4" rx="1.5" fill="#19c6a7"/></svg>
       intuvora
     </a>
-    <span class="muted" style="font-size:14px;font-weight:600">Campaign dashboard</span>
+    <div class="nav-right">
+      <a class="link-btn" href="/dashboard">Dashboard</a>
+      <a class="balance-chip" id="balance-chip" href="/dashboard#wallet" title="Wallet balance — top up">₹0.00</a>
+      <button class="link-btn" id="logout">Log out</button>
+    </div>
   </div>
 </header>
 
@@ -31,16 +35,15 @@
   </div>
 
   <ol class="progress" aria-label="Campaign progress">
-    <li id="p-pay"><i>1</i><span>Payment</span></li>
-    <li id="p-setup"><i>2</i><span>Setup</span></li>
-    <li id="p-upload"><i>3</i><span>Leads</span></li>
-    <li id="p-call"><i>4</i><span>Calling</span></li>
-    <li id="p-results"><i>5</i><span>Results</span></li>
+    <li id="p-setup"><i>1</i><span>Setup</span></li>
+    <li id="p-upload"><i>2</i><span>Leads</span></li>
+    <li id="p-call"><i>3</i><span>Calling</span></li>
+    <li id="p-results"><i>4</i><span>Results</span></li>
   </ol>
 
   <div class="banner">
-    <p><b>You can close this page.</b> Calls continue in the background. Save this link to come back and download
-      your results within 24 hours.</p>
+    <p><b>You can close this page.</b> Calls continue in the background. This campaign stays on your dashboard for
+      24 hours after your last visit — download your report before then.</p>
     <div class="link-row">
       <input type="text" id="pagelink" readonly aria-label="Link to this campaign">
       <button type="button" class="secondary" id="copylink">Copy link</button>
@@ -50,7 +53,7 @@
 
   <section class="card" id="setup-card">
     <div class="card-head">
-      <span class="num">2</span>
+      <span class="num">1</span>
       <div><h2>Sales setup</h2><p>What the AI should say about your business.</p></div>
     </div>
     <form id="setup">
@@ -80,6 +83,10 @@
           <input type="text" id="welcome_message" maxlength="500" placeholder="Hello {customer_name}, this is Priya from {business_name}…">
           <p class="hint">Use {customer_name} and {business_name} — they're filled in on every call.</p>
         </div>
+        <div class="full">
+          <label>AI voice</label>
+          <div class="voices" id="voices" role="radiogroup" aria-label="AI voice"></div>
+        </div>
       </div>
       <div class="row"><button type="submit">Save setup</button></div>
       <div class="msg" id="setupmsg"></div>
@@ -88,7 +95,7 @@
 
   <section class="card" id="upload-card">
     <div class="card-head">
-      <span class="num">3</span>
+      <span class="num">2</span>
       <div><h2>Upload leads</h2><p>Excel (.xlsx) or CSV with a name column and a phone column.</p></div>
     </div>
     <form id="upload">
@@ -105,11 +112,17 @@
 
   <section class="card" id="start-card">
     <div class="card-head">
-      <span class="num">4</span>
+      <span class="num">3</span>
       <div><h2>Start AI calls</h2><p>The AI calls a few leads at a time until the list is done.</p></div>
     </div>
     <div class="start-status" id="startstatus"><span class="dot"></span><span id="startinfo"></span></div>
     <div class="bar" id="startbar" hidden><span id="startbarfill"></span></div>
+    <div class="cost-line">
+      <span>Rate: <b id="rate">₹10</b> per minute, billed per second</span>
+      <span>Unanswered calls: <b>free</b></span>
+      <span>Wallet: <b id="wallet">₹0.00</b></span>
+    </div>
+    <div class="alert warn" id="lowbalance" hidden>Calling is paused because your wallet is low. <a href="/dashboard#wallet">Top up</a> and calls continue automatically.</div>
     <div class="row">
       <button id="start">Start calling</button>
       <button id="stop" class="danger" hidden>Stop remaining calls</button>
@@ -119,7 +132,7 @@
 
   <section class="card" id="results-card">
     <div class="card-head">
-      <span class="num">5</span>
+      <span class="num">4</span>
       <div><h2>Results</h2><p>Updates live while calls are running.</p></div>
     </div>
     <div class="stats" id="stats"></div>
@@ -138,20 +151,26 @@
   </section>
 </main>
 
+<script src="/static/common.js"></script>
 <script>
-const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const id = params.get('id');
-const api = (path, opts) => fetch(`/api/campaigns/${encodeURIComponent(id)}${path}`, opts);
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const label = (s) => esc(String(s || '').replace(/[_-]/g, ' '));
+const api = (path, opts) => call(`/api/campaigns/${encodeURIComponent(id)}${path}`, opts);
+const FIELDS = ['business_name', 'business_description', 'product_details', 'sales_instructions', 'welcome_message', 'language'];
 let timer = null, formFilled = false;
 
-function msg(el, text, ok) { $(el).textContent = text; $(el).className = 'msg ' + (ok ? 'ok' : 'error'); }
-async function errText(res) { try { const d = await res.json(); return typeof d.detail === 'string' ? d.detail : JSON.stringify(d.detail); } catch (e) { return res.statusText; } }
+function renderVoices(voices) {
+  $('voices').innerHTML = voices.map((v, i) => `<label class="voice">
+      <input type="radio" name="voice" value="${esc(v.id)}" ${i === 0 ? 'checked' : ''}>
+      <b>${esc(v.name)}</b>
+      <span>${esc(v.description)}</span>
+      ${v.gender ? `<span class="tag">${esc(v.gender)}</span>` : ''}
+      ${v.sample_url ? `<audio controls preload="none" src="${esc(v.sample_url)}"></audio>` : ''}
+    </label>`).join('');
+}
+const selectedVoice = () => (document.querySelector('input[name=voice]:checked') || {}).value || '';
 
 async function load() {
-  await api('/verify-payment', {method: 'POST'}).catch(() => {});
   const res = await api('');
   if (!res.ok) { msg('topmsg', await errText(res)); document.querySelectorAll('section').forEach(s => s.classList.add('locked')); return; }
   render(await res.json());
@@ -159,7 +178,6 @@ async function load() {
 
 function renderProgress(c, stats) {
   const done = {
-    'p-pay': c.status !== 'pending_payment',
     'p-setup': Boolean(c.business_name && c.product_details && c.sales_instructions),
     'p-upload': stats.total > 0,
     'p-call': ['completed', 'stopped'].includes(c.status),
@@ -174,27 +192,28 @@ function renderProgress(c, stats) {
   }
 }
 
-function render({campaign: c, stats, leads}) {
-  const editable = c.status === 'paid';
-  if (c.status === 'pending_payment') msg('topmsg', 'Waiting for payment confirmation…', true);
-  else $('topmsg').textContent = '';
+function render({campaign: c, stats, leads, balance_paise}) {
+  const editable = c.status === 'setup';
   $('setup-card').classList.toggle('locked', !editable);
   $('upload-card').classList.toggle('locked', !editable);
-  $('start-card').classList.toggle('locked', !['paid', 'running'].includes(c.status));
+  $('start-card').classList.toggle('locked', !['setup', 'running'].includes(c.status));
   renderProgress(c, stats);
+  showBalance(balance_paise);
+  $('wallet').textContent = rupees(balance_paise);
+  $('lowbalance').hidden = !(c.status === 'running' && c.low_balance);
 
   if (!formFilled) {
-    for (const k of ['business_name', 'business_description', 'product_details', 'sales_instructions', 'welcome_message', 'language'])
-      if (c[k]) $(k).value = c[k];
+    for (const k of FIELDS) if (c[k]) $(k).value = c[k];
+    const v = c.voice && document.querySelector(`input[name=voice][value="${CSS.escape(c.voice)}"]`);
+    if (v) v.checked = true;
     formFilled = true;
   }
   const ready = c.business_name && c.product_details && c.sales_instructions && stats.total > 0;
-  $('start').hidden = c.status !== 'paid';
+  $('start').hidden = c.status !== 'setup';
   $('start').disabled = !ready;
   $('stop').hidden = c.status !== 'running';
   $('startinfo').textContent = {
-    pending_payment: 'Complete the payment to begin.',
-    paid: ready ? `Ready to call ${stats.total} leads.` : 'Save the setup and upload leads first.',
+    setup: ready ? `Ready to call ${stats.total} leads.` : 'Save the setup and upload leads first.',
     running: `Calling… ${stats.done} of ${stats.total} done.`,
     completed: `Finished: all ${stats.total} leads processed.`,
     stopped: `Stopped. ${stats.done} of ${stats.total} processed.`,
@@ -204,6 +223,7 @@ function render({campaign: c, stats, leads}) {
   $('startbarfill').style.width = stats.total ? `${Math.round(100 * stats.done / stats.total)}%` : '0';
 
   $('stats').innerHTML = `<div class="stat"><b>${stats.total}</b>Leads</div><div class="stat"><b>${stats.done}</b>Done</div>` +
+    `<div class="stat"><b>${minutes(stats.seconds)}</b>Talk time</div><div class="stat"><b>${rupees(stats.cost_paise)}</b>Cost so far</div>` +
     Object.entries(stats.by_outcome).map(([k, v]) => `<div class="stat"><b>${v}</b>${label(k)}</div>`).join('');
   $('leads').innerHTML = leads.length ? leads.map(l => `<tr>
       <td><b>${esc(l.name)}</b></td><td>${esc(l.phone)}</td>
@@ -214,13 +234,13 @@ function render({campaign: c, stats, leads}) {
   $('export').href = `/api/campaigns/${encodeURIComponent(id)}/export`;
 
   clearTimeout(timer);
-  if (['running', 'stopped', 'pending_payment'].includes(c.status)) timer = setTimeout(load, 4000);
+  if (['running', 'stopped'].includes(c.status)) timer = setTimeout(load, 4000);
 }
 
 $('setup').onsubmit = async (e) => {
   e.preventDefault();
-  const body = {};
-  for (const k of ['business_name', 'business_description', 'product_details', 'sales_instructions', 'welcome_message', 'language']) body[k] = $(k).value.trim();
+  const body = {voice: selectedVoice()};
+  for (const k of FIELDS) body[k] = $(k).value.trim();
   const res = await api('/setup', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
   if (!res.ok) return msg('setupmsg', await errText(res));
   msg('setupmsg', 'Saved.', true); render(await res.json());
@@ -272,9 +292,11 @@ $('stop').onclick = async () => {
   try {
     const cfg = await (await fetch('/api/config')).json();
     $('language').innerHTML = cfg.languages.map(l => `<option>${esc(l)}</option>`).join('');
+    $('rate').textContent = rupees(cfg.price_per_minute_paise).replace(/\.00$/, '');
+    renderVoices(await (await fetch('/api/voices')).json());
   } catch (e) {}
+  await initHeader();
   if (!id) { msg('topmsg', 'Missing campaign id.'); return; }
-  if (params.has('razorpay_payment_id')) history.replaceState(null, '', `/campaign?id=${encodeURIComponent(id)}`);
   $('pagelink').value = `${location.origin}/campaign?id=${encodeURIComponent(id)}`;
   load();
 })();
