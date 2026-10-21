@@ -21,16 +21,14 @@ def ready_campaign(client, csv=CSV):
     return cid
 
 
-def test_accounts_login_logout(client):
+def test_google_sign_in_and_logout(client):
     assert client.get("/api/me").status_code == 401
     me = signup(client)
-    assert me["email"] == "owner@example.com" and me["balance_paise"] == 0
-    assert client.post("/api/auth/signup", json={"email": "owner@example.com", "password": "another123"}).status_code == 422
+    assert me["email"] == "owner@example.com" and me["name"] == "Owner" and me["balance_paise"] == 0
+    assert client.post("/api/auth/google", json={"credential": "forged-token-123"}).status_code == 401
     client.post("/api/auth/logout")
     assert client.get("/api/me").status_code == 401
-    assert client.post("/api/auth/login", json={"email": "owner@example.com", "password": "wrong-pass"}).status_code == 401
-    assert client.post("/api/auth/login", json={"email": "OWNER@example.com", "password": "secret123"}).status_code == 200
-    assert client.get("/api/me").json()["name"] == "Owner"
+    assert signup(client)["id"] == me["id"]  # same Google account -> same wallet
 
 
 def test_topup_credited_once(client, payments):
@@ -50,7 +48,8 @@ def test_topup_credited_once(client, payments):
 def test_full_workflow_with_billing(client, bolna, payments):
     signup(client)
     cid = ready_campaign(client)
-    assert client.post(f"/api/campaigns/{cid}/start").status_code == 402  # empty wallet
+    res = client.post(f"/api/campaigns/{cid}/start")
+    assert res.status_code == 402 and "₹50" in res.json()["detail"]  # below the low-balance limit
     top_up(client, payments, 500)
 
     res = client.post(f"/api/campaigns/{cid}/start")
@@ -111,12 +110,12 @@ def test_low_balance_pauses_and_resumes(client, bolna, payments, settings):
     cid = ready_campaign(client)
     client.post(f"/api/campaigns/{cid}/start")
     client.worker.tick()
-    # a long call drains the wallet below one minute's price
-    bolna.executions["exec-0"] = {"id": "exec-0", "status": "completed", "conversation_duration": 570}
+    # a long call drains the wallet below the ₹50 low-balance limit
+    bolna.executions["exec-0"] = {"id": "exec-0", "status": "completed", "conversation_duration": 312}
     bolna.executions["exec-1"] = {"id": "exec-1", "status": "busy"}
     client.worker.tick()
     data = client.get(f"/api/campaigns/{cid}").json()
-    assert data["balance_paise"] == 10000 - 9500
+    assert data["balance_paise"] == 10000 - 5200  # ₹48 left, below ₹50
     assert data["campaign"]["low_balance"] is True and len(bolna.calls) == 2  # Meena not called yet
     top_up(client, payments, 200)
     client.worker.tick()

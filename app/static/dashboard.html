@@ -50,6 +50,7 @@
       </div>
       <div class="wallet-balance" id="balance">₹0.00</div>
       <p class="wallet-meta">₹<span id="rate">10</span> per minute, billed per second · about <b id="minutes-left">0</b> minutes of talk time left</p>
+      <p class="wallet-meta">Calling pauses when your balance is below <b id="low-limit">₹50</b>.</p>
       <div class="amounts" id="amounts">
         <button type="button" data-amount="500">₹500</button>
         <button type="button" data-amount="1000">₹1,000</button>
@@ -139,6 +140,7 @@ $('new-campaign').onclick = async () => {
   const me = await initHeader();
   $('greeting').textContent = `Hi, ${me.name}`;
   $('rate').textContent = pricePerMinute / 100;
+  $('low-limit').textContent = rupees(lowBalance).replace(/\.00$/, '');
   const params = new URLSearchParams(location.search);
   if (params.has('topup')) {  // back from Razorpay: credit the payment
     const r = await (await call('/api/wallet/topups/verify', {method: 'POST'})).json();

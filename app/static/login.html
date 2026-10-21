@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Log in · Intuvora</title>
+  <title>Sign in · Intuvora</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%235b4bff'/%3E%3Crect x='8' y='13' width='3' height='6' rx='1.5' fill='white'/%3E%3Crect x='13' y='9' width='3' height='14' rx='1.5' fill='white'/%3E%3Crect x='18' y='11' width='3' height='10' rx='1.5' fill='white'/%3E%3Crect x='23' y='14' width='3' height='4' rx='1.5' fill='%2319c6a7'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -22,70 +22,48 @@
 </header>
 
 <main class="auth-wrap">
-  <div class="auth-card">
-    <h1 id="title">Welcome back</h1>
-    <p id="subtitle">Log in to run your AI sales campaigns.</p>
-    <div class="tabs" role="tablist">
-      <button type="button" id="tab-login" class="active" role="tab">Log in</button>
-      <button type="button" id="tab-signup" role="tab">Create account</button>
-    </div>
-    <form id="form">
-      <div id="name-field" hidden>
-        <label for="name">Your name</label>
-        <input type="text" id="name" maxlength="100" autocomplete="name">
-      </div>
-      <label for="email">Email</label>
-      <input type="email" id="email" required autocomplete="email">
-      <label for="password">Password</label>
-      <input type="password" id="password" required minlength="8" autocomplete="current-password">
-      <p class="hint" id="pw-hint" hidden>At least 8 characters.</p>
-      <button type="submit" id="submit">Log in</button>
-      <div class="msg" id="formmsg"></div>
-    </form>
-    <p class="auth-note">Pay as you go: ₹<span id="rate">10</span> per minute of answered calls. Top up any time.</p>
+  <div class="auth-card" style="text-align:center">
+    <h1>Welcome to Intuvora</h1>
+    <p>Sign in or create your account with Google. No password to remember.</p>
+    <div id="google-button" class="google-button"></div>
+    <div class="msg" id="formmsg"></div>
+    <p class="auth-note">New here? Continuing with Google creates your account. Pay as you go: ₹<span id="rate">10</span>
+      per minute of answered calls.</p>
   </div>
 </main>
 
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const params = new URLSearchParams(location.search);
-const asked = params.get('next') || '';
+const asked = new URLSearchParams(location.search).get('next') || '';
 const next = /^\/(?![\/\\])/.test(asked) ? asked : '/dashboard';  // same-site paths only
-let mode = 'login';
 
-function setMode(m) {
-  mode = m;
-  const signup = m === 'signup';
-  $('tab-login').classList.toggle('active', !signup);
-  $('tab-signup').classList.toggle('active', signup);
-  $('name-field').hidden = !signup;
-  $('pw-hint').hidden = !signup;
-  $('title').textContent = signup ? 'Create your account' : 'Welcome back';
-  $('subtitle').textContent = signup ? 'Start calling your leads in a few minutes.' : 'Log in to run your AI sales campaigns.';
-  $('submit').textContent = signup ? 'Create account' : 'Log in';
-  $('password').autocomplete = signup ? 'new-password' : 'current-password';
-  $('formmsg').textContent = '';
+function showError(text) { $('formmsg').textContent = text; $('formmsg').className = 'msg error'; }
+
+async function onGoogleCredential(response) {
+  const res = await fetch('/api/auth/google', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                               body: JSON.stringify({credential: response.credential})});
+  if (res.ok) { location.href = next; return; }
+  const d = await res.json().catch(() => ({}));
+  showError(typeof d.detail === 'string' ? d.detail : 'Google sign-in failed. Please try again.');
 }
-$('tab-login').onclick = () => setMode('login');
-$('tab-signup').onclick = () => setMode('signup');
-setMode(params.get('mode') === 'signup' ? 'signup' : 'login');
 
-fetch('/api/config').then(r => r.json()).then(c => { $('rate').textContent = c.price_per_minute_paise / 100; }).catch(() => {});
-fetch('/api/me').then(r => { if (r.ok) location.href = next; });  // already logged in
+function startGoogle(clientId, tries = 0) {
+  if (!window.google || !google.accounts) {  // the Google script loads asynchronously
+    if (tries > 50) return showError('Could not load Google sign-in. Check your connection and reload the page.');
+    return setTimeout(() => startGoogle(clientId, tries + 1), 100);
+  }
+  google.accounts.id.initialize({client_id: clientId, callback: onGoogleCredential, ux_mode: 'popup'});
+  google.accounts.id.renderButton($('google-button'), {theme: 'outline', size: 'large', shape: 'pill',
+                                                       text: 'continue_with', width: 300});
+}
 
-$('form').onsubmit = async (e) => {
-  e.preventDefault();
-  $('submit').disabled = true;
-  const body = {email: $('email').value.trim(), password: $('password').value};
-  if (mode === 'signup') body.name = $('name').value.trim();
-  try {
-    const res = await fetch(`/api/auth/${mode}`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
-    if (res.ok) { location.href = next; return; }
-    const d = await res.json().catch(() => ({}));
-    $('formmsg').textContent = typeof d.detail === 'string' ? d.detail : 'Please check your details and try again.';
-    $('formmsg').className = 'msg error';
-  } finally { $('submit').disabled = false; }
-};
+fetch('/api/me').then(r => { if (r.ok) location.href = next; });  // already signed in
+fetch('/api/config').then(r => r.json()).then(c => {
+  $('rate').textContent = c.price_per_minute_paise / 100;
+  if (!c.google_client_id) return showError('Google sign-in is not configured yet (GOOGLE_CLIENT_ID).');
+  startGoogle(c.google_client_id);
+}).catch(() => showError('Could not load sign-in. Please reload the page.'));
 </script>
 </body>
 </html>

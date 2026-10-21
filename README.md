@@ -13,12 +13,12 @@ are dropped 24 hours after the customer's last visit.
 
 | Step | What happens | Where |
 |---|---|---|
-| 1. Account | Sign up / log in with email and password (session cookie, passwords hashed with scrypt). | `app/accounts.py`, `/login` |
+| 1. Account | "Continue with Google" — signs in or creates the account; Google handles passwords and recovery. | `app/google_auth.py`, `/login` |
 | 2. Wallet | Top up via a Razorpay Payment Link. On return the server asks Razorpay if it is paid and credits the wallet once. | `app/payments.py`, `/dashboard` |
 | 3. Business details | Business, offer, sales instructions, opening line, language and **AI voice**. Pre-filled from the last campaign. | `PUT /api/campaigns/{id}/setup` |
 | 4. Upload leads | `.xlsx` or `.csv` with name and phone columns. Every other column (city, product…) is passed to the AI for that lead. | `app/leads.py` |
 | 5. AI calling | Creates a Bolna agent from the campaign (script, welcome message, language, voice), calls up to `MAX_CONCURRENT_CALLS` leads at a time, and deletes the agent when done. | `app/bolna.py`, `app/worker.py` |
-| 6. Billing | Each answered call is charged per second at `PRICE_PER_MINUTE_PAISE` (₹10/min by default). Unanswered calls are free. If the balance drops below one minute, new calls pause and resume automatically after a top-up. | `app/worker.py` |
+| 6. Billing | Each answered call is charged per second at `PRICE_PER_MINUTE_PAISE` (₹10/min by default). Unanswered calls are free. Below `LOW_BALANCE_PAISE` (₹50) a campaign can't start and the next lead isn't called; calling resumes automatically after a top-up. Calls already running finish normally. | `app/worker.py` |
 | 7. Report | Excel with a **Summary** sheet (every campaign detail, outcome breakdown, talk time, cost), a formatted **Results** sheet and a **Transcripts** sheet. | `app/export.py` |
 
 ## Setup
@@ -28,12 +28,12 @@ python -m venv .venv
 source .venv/bin/activate        # Windows: .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 cp .env.example .env             # Windows: copy .env.example .env
-# fill in RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET and BOLNA_API_KEY in .env
+# fill in RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, BOLNA_API_KEY and GOOGLE_CLIENT_ID in .env
 python -m uvicorn app.main:create_app --factory
 # open http://localhost:8000
 ```
 
-The app refuses to start without the Razorpay keys and the Bolna API key. Use Razorpay **test** keys (`rzp_test_...`)
+The app refuses to start without the Razorpay keys, the Bolna API key and the Google client ID. Use Razorpay **test** keys (`rzp_test_...`)
 first; Razorpay's redirect back to `localhost` works from your own browser.
 
 ### Pricing settings (`.env`)
@@ -42,6 +42,17 @@ first; Razorpay's redirect back to `localhost` works from your own browser.
 |---|---|---|
 | `PRICE_PER_MINUTE_PAISE` | `1000` | ₹10 per minute of answered calls, billed per second |
 | `MIN_TOPUP_PAISE` | `10000` | Smallest top-up, ₹100 |
+| `LOW_BALANCE_PAISE` | `5000` | Below ₹50: can't start, next lead not called |
+
+### Google sign-in
+
+1. [Google Cloud Console](https://console.cloud.google.com/) → create a project.
+2. **APIs & Services → OAuth consent screen**: External, app name "Intuvora", your support email. Publish it when going live.
+3. **Credentials → Create credentials → OAuth client ID → Web application.**
+4. **Authorized JavaScript origins:** `http://localhost:8000` (and `http://localhost`) for testing, plus `https://your-domain` when live.
+5. Copy the **Client ID** into `.env` as `GOOGLE_CLIENT_ID`. No client secret is needed.
+
+Open the app at `http://localhost:8000` (not `127.0.0.1`) so it matches the authorized origin.
 
 ### AI voices
 
@@ -79,7 +90,7 @@ that process's memory. Back up `data/accounts.db` — it holds customer wallets.
 ## Website
 
 - `/` — homepage (`app/static/index.html`). Demo video: set `DEMO_VIDEO_URL` near the bottom of the file.
-- `/login` — log in / create account.
+- `/login` — "Continue with Google" (sign in or create account).
 - `/dashboard` — balance, top-up, new campaign, recent campaigns, usage & payments history.
 - `/campaign?id=…` — set up, upload, call, watch results, download the report.
 
@@ -97,6 +108,7 @@ Tests use stand-in Bolna and Razorpay clients (`tests/conftest.py`); no keys or 
 app/
   main.py        FastAPI routes (create_app factory)
   accounts.py    accounts, sessions, wallet, top-ups, usage, saved business details (SQLite)
+  google_auth.py verifies Google sign-in tokens
   store.py       in-memory campaigns and leads (never written to disk)
   payments.py    Razorpay Payment Links for top-ups
   bolna.py       Bolna API client, sales script, voices, call languages

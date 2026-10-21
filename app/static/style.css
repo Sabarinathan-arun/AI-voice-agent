@@ -271,6 +271,7 @@ pre { white-space: pre-wrap; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo,
 .auth-card form button[type=submit] { width: 100%; margin-top: 20px; }
 input[type=email], input[type=password], input[type=number] { width: 100%; padding: 11px 13px; border: 1px solid var(--line); border-radius: 10px; font: inherit; font-size: 15px; background: #fff; color: var(--fg); }
 input[type=email]:focus, input[type=password]:focus, input[type=number]:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+.google-button { display: flex; justify-content: center; min-height: 44px; margin: 24px 0 8px; }
 .auth-note { font-size: 13px; color: var(--muted); text-align: center; margin-top: 16px; }
 
 .nav-right { display: flex; align-items: center; gap: 12px; }

@@ -46,11 +46,22 @@ class FakeRazorpay:
         self.paid.update(link["ref"] for link in self.links)
 
 
+class FakeGoogle:
+    """Stands in for Google sign-in: a credential "google:<email>" is a verified Google account."""
+
+    def verify(self, credential):
+        from app.google_auth import GoogleAuthError
+        if not credential.startswith("google:"):
+            raise GoogleAuthError("Google sign-in failed. Please try again.")
+        email = credential.split(":", 1)[1]
+        return {"sub": "sub-" + email, "email": email, "name": email.split("@")[0].title()}
+
+
 @pytest.fixture
 def settings(tmp_path):
     return dataclasses.replace(load_settings(), max_concurrent_calls=2, app_base_url="http://testserver",
                                database_path=str(tmp_path / "accounts.db"), price_per_minute_paise=1000,
-                               min_topup_paise=10000)
+                               min_topup_paise=10000, low_balance_paise=5000, google_client_id="test-client")
 
 
 @pytest.fixture
@@ -65,7 +76,7 @@ def payments():
 
 @pytest.fixture
 def client(settings, bolna, payments):
-    app = create_app(settings, bolna=bolna, payments=payments, run_worker=False)
+    app = create_app(settings, bolna=bolna, payments=payments, google=FakeGoogle(), run_worker=False)
     with TestClient(app) as c:
         c.worker = app.state.worker
         c.store = app.state.store
@@ -73,9 +84,9 @@ def client(settings, bolna, payments):
         yield c
 
 
-def signup(client, email="owner@example.com", password="secret123"):
-    res = client.post("/api/auth/signup", json={"name": "Owner", "email": email, "password": password})
-    assert res.status_code == 201, res.text
+def signup(client, email="owner@example.com"):
+    res = client.post("/api/auth/google", json={"credential": f"google:{email}"})
+    assert res.status_code == 200, res.text
     return res.json()
 
 

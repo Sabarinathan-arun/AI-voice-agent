@@ -158,8 +158,8 @@ class CampaignWorker:
 
         in_flight = self.store.leads_with_status(campaign["id"], IN_FLIGHT)
         if campaign["status"] == "running":
-            # Only start new calls while the wallet covers at least one minute; resume after a top-up.
-            low = self.accounts.balance(campaign["user_id"]) < self.settings.price_per_minute_paise
+            # Don't call the next lead while the wallet is below the low-balance limit; resume after a top-up.
+            low = self.accounts.balance(campaign["user_id"]) < self.settings.low_balance_paise
             if low != campaign.get("low_balance"):
                 self.store.update_campaign(campaign["id"], low_balance=low)
             free = 0 if low else self.settings.max_concurrent_calls - len(in_flight)

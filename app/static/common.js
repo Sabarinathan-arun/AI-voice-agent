@@ -28,15 +28,18 @@ async function errText(res) {
 function msg(el, text, ok) { $(el).textContent = text; $(el).className = 'msg ' + (ok ? 'ok' : 'error'); }
 
 /* Header: name, balance chip and log out. */
-let pricePerMinute = 1000;
+let pricePerMinute = 1000, lowBalance = 5000;
 function showBalance(paise) {
   const chip = $('balance-chip');
   if (!chip) return;
   chip.textContent = rupees(paise);
-  chip.classList.toggle('low', paise < pricePerMinute);
+  chip.classList.toggle('low', paise < lowBalance);
 }
 async function initHeader() {
-  try { pricePerMinute = (await (await fetch('/api/config')).json()).price_per_minute_paise; } catch (e) {}
+  try {
+    const cfg = await (await fetch('/api/config')).json();
+    pricePerMinute = cfg.price_per_minute_paise; lowBalance = cfg.low_balance_paise;
+  } catch (e) {}
   const me = await (await call('/api/me')).json();
   if ($('user-name')) $('user-name').textContent = me.name;
   showBalance(me.balance_paise);

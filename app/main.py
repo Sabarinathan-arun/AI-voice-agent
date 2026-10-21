@@ -1,4 +1,4 @@
-"""FastAPI app: login -> wallet top-up -> sales setup -> lead upload -> AI calls -> results -> export.
+"""FastAPI app: Google sign-in -> wallet top-up -> sales setup -> lead upload -> AI calls -> results -> export.
 
 Accounts, wallet and usage history are kept in SQLite (accounts.py). Each campaign's leads and results live in
 memory only and are dropped 24 hours after the last visit (store.py). Calls are billed per second at the
@@ -16,10 +16,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from .accounts import AccountError, Accounts
+from .accounts import Accounts
 from .bolna import LANGUAGES, BolnaError, load_voices, make_bolna_client
 from .config import Settings, load_settings
 from .export import build_results_workbook
+from .google_auth import GoogleAuthError, make_google_auth
 from .leads import LeadFileError, parse_leads
 from .payments import PaymentError, make_payment_provider
 from .store import Store, iso, utcnow
@@ -33,15 +34,8 @@ PROFILE_FIELDS = ("business_name", "business_description", "product_details", "s
                   "welcome_message", "language", "voice")
 
 
-class SignupIn(BaseModel):
-    name: str = Field(default="", max_length=100)
-    email: str = Field(min_length=3, max_length=200)
-    password: str = Field(min_length=8, max_length=200)
-
-
-class LoginIn(BaseModel):
-    email: str = Field(min_length=3, max_length=200)
-    password: str = Field(min_length=1, max_length=200)
+class GoogleLoginIn(BaseModel):
+    credential: str = Field(min_length=10, max_length=5000)
 
 
 class TopupIn(BaseModel):
@@ -65,12 +59,14 @@ class SetupIn(BaseModel):
         return value
 
 
-def create_app(settings: Settings | None = None, bolna=None, payments=None, run_worker: bool = True) -> FastAPI:
+def create_app(settings: Settings | None = None, bolna=None, payments=None, google=None,
+               run_worker: bool = True) -> FastAPI:
     settings = settings or load_settings()
     store = Store()
     accounts = Accounts(settings.database_path)
     bolna = bolna or make_bolna_client(settings)
     payments = payments or make_payment_provider(settings)
+    google = google or make_google_auth(settings)
     voices = load_voices(settings.voices_path)
     if not voices:
         raise RuntimeError(f"No voices configured in {settings.voices_path}")
@@ -169,6 +165,8 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, run_
             "price_currency": settings.price_currency,
             "price_per_minute_paise": settings.price_per_minute_paise,
             "min_topup_paise": settings.min_topup_paise,
+            "low_balance_paise": settings.low_balance_paise,
+            "google_client_id": settings.google_client_id,
             "max_leads": settings.max_leads_per_campaign,
             "languages": list(LANGUAGES),
         }
@@ -179,20 +177,14 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, run_
 
     # --- accounts ----------------------------------------------------------------
 
-    @app.post("/api/auth/signup", status_code=201)
-    def signup(body: SignupIn, response: Response):
+    @app.post("/api/auth/google")
+    def google_login(body: GoogleLoginIn, response: Response):
+        """Sign in (or sign up) with a Google ID token from the "Continue with Google" button."""
         try:
-            user = accounts.create_user(body.email, body.name, body.password)
-        except AccountError as exc:
-            raise HTTPException(422, str(exc))
-        start_session(response, user)
-        return me(user)
-
-    @app.post("/api/auth/login")
-    def login(body: LoginIn, response: Response):
-        user = accounts.authenticate(body.email, body.password)
-        if not user:
-            raise HTTPException(401, "Wrong email or password.")
+            identity = google.verify(body.credential)
+        except GoogleAuthError as exc:
+            raise HTTPException(401, str(exc))
+        user = accounts.user_for_google(identity["sub"], identity["email"], identity["name"])
         start_session(response, user)
         return me(user)
 
@@ -290,8 +282,9 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, run_
             raise HTTPException(422, "Complete the sales setup first.")
         if not store.get_leads(campaign_id):
             raise HTTPException(422, "Upload leads first.")
-        if accounts.balance(user["id"]) < settings.price_per_minute_paise:
-            raise HTTPException(402, "Your wallet balance is too low. Please top up to start calling.")
+        if accounts.balance(user["id"]) < settings.low_balance_paise:
+            raise HTTPException(402, f"Your wallet needs at least ₹{settings.low_balance_paise / 100:g} to start "
+                                     "calling. Please top up.")
         webhook_url = f"{settings.app_base_url}/api/webhooks/bolna"
         if not settings.app_base_url.startswith("https://"):
             webhook_url = None  # Bolna cannot reach a local URL; results are polled instead

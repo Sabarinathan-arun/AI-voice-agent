@@ -80,3 +80,45 @@ def test_voices_file_is_valid(settings):
     assert voices and len({v["id"] for v in voices}) == len(voices)
     for v in voices:
         assert v["name"] and v["provider"] and v["provider_config"]
+
+
+def test_google_token_checks(settings):
+    from app.google_auth import GoogleAuth, GoogleAuthError
+    import pytest
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = request.url.params["id_token"]
+        base = {"iss": "https://accounts.google.com", "sub": "123", "email": "a@gmail.com",
+                "email_verified": "true", "name": "Asha"}
+        if token == "good":
+            return httpx.Response(200, json={**base, "aud": "my-client"})
+        if token == "other-app":
+            return httpx.Response(200, json={**base, "aud": "someone-else"})
+        if token == "unverified":
+            return httpx.Response(200, json={**base, "aud": "my-client", "email_verified": "false"})
+        return httpx.Response(400, json={"error": "invalid_token"})
+
+    g = GoogleAuth(dataclasses.replace(settings, google_client_id="my-client"))
+    g._http = httpx.Client(transport=httpx.MockTransport(handler))
+    assert g.verify("good") == {"sub": "123", "email": "a@gmail.com", "name": "Asha"}
+    for bad in ("other-app", "unverified", "expired"):
+        with pytest.raises(GoogleAuthError):
+            g.verify(bad)
+
+
+def test_accounts_db_from_previous_version_upgrades(tmp_path):
+    import sqlite3
+    from app.accounts import Accounts
+    path = tmp_path / "old.db"
+    db = sqlite3.connect(path)  # schema used before Google sign-in
+    db.executescript("""CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+                        password_hash TEXT NOT NULL, balance_paise INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+                        INSERT INTO users VALUES ('u1', 'old@gmail.com', 'Old', 'scrypt$x$y', 2500, '2026-01-01');""")
+    db.commit()
+    db.close()
+    accounts = Accounts(str(path))
+    linked = accounts.user_for_google("g-1", "OLD@gmail.com", "Old User")
+    assert linked["id"] == "u1" and linked["balance_paise"] == 2500  # existing wallet kept
+    new = accounts.user_for_google("g-2", "new@gmail.com", "New")
+    assert new["email"] == "new@gmail.com" and new["balance_paise"] == 0
+    assert accounts.user_for_google("g-2", "new@gmail.com", "New")["id"] == new["id"]

@@ -32,6 +32,9 @@ class Settings:
     price_currency: str
     price_per_minute_paise: int
     min_topup_paise: int
+    low_balance_paise: int
+
+    google_client_id: str
 
     bolna_api_key: str
     bolna_api_base: str
@@ -65,6 +68,8 @@ def load_settings() -> Settings:
         price_currency=os.environ.get("PRICE_CURRENCY", "inr").lower(),
         price_per_minute_paise=_int("PRICE_PER_MINUTE_PAISE", 1000),
         min_topup_paise=_int("MIN_TOPUP_PAISE", 10000),
+        low_balance_paise=_int("LOW_BALANCE_PAISE", 5000),
+        google_client_id=os.environ.get("GOOGLE_CLIENT_ID", ""),
         bolna_api_key=os.environ.get("BOLNA_API_KEY", ""),
         bolna_api_base=os.environ.get("BOLNA_API_BASE", "https://api.bolna.ai").rstrip("/"),
         bolna_from_number=os.environ.get("BOLNA_FROM_NUMBER", ""),

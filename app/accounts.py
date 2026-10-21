@@ -1,14 +1,12 @@
-"""Customer accounts, stored in SQLite: logins, wallet balance, top-ups, usage history and the last-used
-business details (for auto-fill).
+"""Customer accounts, stored in SQLite: Google sign-in identities, sessions, wallet balance, top-ups, usage history
+and the last-used business details (for auto-fill).
 
 Lead lists, call transcripts and results are NOT stored here; they stay in memory for 24 hours (store.py).
 Money is kept in paise (integer) to avoid rounding errors.
 """
 
 import hashlib
-import hmac
 import json
-import re
 import secrets
 import sqlite3
 import uuid
@@ -19,14 +17,14 @@ from pathlib import Path
 from .store import iso, utcnow
 
 SESSION_LIFETIME = timedelta(days=30)
-EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     id            TEXT PRIMARY KEY,
     email         TEXT NOT NULL UNIQUE,
     name          TEXT NOT NULL,
-    password_hash TEXT NOT NULL,
+    password_hash TEXT NOT NULL DEFAULT '',          -- unused since sign-in moved to Google
+    google_sub    TEXT,                              -- Google account id
     balance_paise INTEGER NOT NULL DEFAULT 0,
     created_at    TEXT NOT NULL
 );
@@ -62,24 +60,6 @@ CREATE INDEX IF NOT EXISTS idx_usage_user ON usage(user_id);
 """
 
 
-class AccountError(ValueError):
-    pass
-
-
-def _hash_password(password: str, salt: bytes | None = None) -> str:
-    salt = salt or secrets.token_bytes(16)
-    digest = hashlib.scrypt(password.encode(), salt=salt, n=2**14, r=8, p=1, dklen=32)
-    return f"scrypt${salt.hex()}${digest.hex()}"
-
-
-def _check_password(password: str, stored: str) -> bool:
-    try:
-        _, salt_hex, _ = stored.split("$")
-    except ValueError:
-        return False
-    return hmac.compare_digest(_hash_password(password, bytes.fromhex(salt_hex)), stored)
-
-
 def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
@@ -91,6 +71,10 @@ class Accounts:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         with self._db() as db:
             db.executescript(SCHEMA)
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(users)")}
+            if "google_sub" not in columns:  # databases created before Google sign-in
+                db.execute("ALTER TABLE users ADD COLUMN google_sub TEXT")
+            db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google ON users(google_sub)")
 
     @contextmanager
     def _db(self):
@@ -109,29 +93,26 @@ class Accounts:
 
     # --- users and sessions ------------------------------------------------------
 
-    def create_user(self, email: str, name: str, password: str) -> dict:
+    def user_for_google(self, google_sub: str, email: str, name: str) -> dict:
+        """Find the account for a verified Google identity, linking an existing account with the same email,
+        or create a new one."""
         email = email.strip().lower()
-        if not EMAIL_RE.match(email):
-            raise AccountError("Enter a valid email address.")
-        if len(password) < 8:
-            raise AccountError("Password must be at least 8 characters.")
-        user = {"id": uuid.uuid4().hex, "email": email, "name": name.strip()[:100] or email.split("@")[0]}
-        try:
-            with self._db() as db:
-                db.execute(
-                    "INSERT INTO users (id, email, name, password_hash, created_at) VALUES (?, ?, ?, ?, ?)",
-                    (user["id"], email, user["name"], _hash_password(password), iso(utcnow())),
-                )
-        except sqlite3.IntegrityError:
-            raise AccountError("An account with this email already exists. Please log in.")
-        return self.get_user(user["id"])
-
-    def authenticate(self, email: str, password: str) -> dict | None:
         with self._db() as db:
-            row = db.execute("SELECT * FROM users WHERE email = ?", (email.strip().lower(),)).fetchone()
-        if not row or not _check_password(password, row["password_hash"]):
-            return None
-        return self.get_user(row["id"])
+            row = db.execute("SELECT id FROM users WHERE google_sub = ?", (google_sub,)).fetchone()
+            if not row:
+                row = db.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+                if row:
+                    db.execute("UPDATE users SET google_sub = ? WHERE id = ?", (google_sub, row["id"]))
+            if row:
+                db.execute("UPDATE users SET email = ?, name = ? WHERE id = ?",
+                           (email, name.strip()[:100] or email.split("@")[0], row["id"]))
+                user_id = row["id"]
+            else:
+                user_id = uuid.uuid4().hex
+                db.execute("INSERT INTO users (id, email, name, password_hash, google_sub, created_at) "
+                           "VALUES (?, ?, ?, '', ?, ?)",
+                           (user_id, email, name.strip()[:100] or email.split("@")[0], google_sub, iso(utcnow())))
+        return self.get_user(user_id)
 
     def get_user(self, user_id: str) -> dict | None:
         with self._db() as db:

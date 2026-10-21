@@ -122,7 +122,7 @@
       <span>Unanswered calls: <b>free</b></span>
       <span>Wallet: <b id="wallet">₹0.00</b></span>
     </div>
-    <div class="alert warn" id="lowbalance" hidden>Calling is paused because your wallet is low. <a href="/dashboard#wallet">Top up</a> and calls continue automatically.</div>
+    <div class="alert warn" id="lowbalance" hidden>Calling is paused because your wallet is below <span id="lowlimit">₹50</span>. <a href="/dashboard#wallet">Top up</a> and calls continue automatically.</div>
     <div class="row">
       <button id="start">Start calling</button>
       <button id="stop" class="danger" hidden>Stop remaining calls</button>
@@ -293,6 +293,7 @@ $('stop').onclick = async () => {
     const cfg = await (await fetch('/api/config')).json();
     $('language').innerHTML = cfg.languages.map(l => `<option>${esc(l)}</option>`).join('');
     $('rate').textContent = rupees(cfg.price_per_minute_paise).replace(/\.00$/, '');
+    $('lowlimit').textContent = rupees(cfg.low_balance_paise).replace(/\.00$/, '');
     renderVoices(await (await fetch('/api/voices')).json());
   } catch (e) {}
   await initHeader();
