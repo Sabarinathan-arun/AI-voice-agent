@@ -64,6 +64,15 @@ and fetches the data from Bolna itself). Without https, the app polls Bolna ever
 
 Run **one** server process: sessions live in that process's memory, and a restart ends any campaign in progress.
 
+## Website
+
+- `app/static/index.html` — the Intuvora homepage (story, how it works, demo video, features, pricing, FAQ). Every
+  "Start a campaign" button opens Razorpay checkout. Price and lead limit are read from `.env`.
+- **Demo video:** set `DEMO_VIDEO_URL` near the bottom of `index.html` to a YouTube embed link
+  (`https://www.youtube.com/embed/VIDEO_ID`) or an MP4 placed in `app/static` (e.g. `/static/demo.mp4`).
+  Empty shows a "coming soon" card.
+- `app/static/campaign.html` — the customer's campaign dashboard. `app/static/style.css` styles both pages.
+
 ## Outcomes
 
 `interested`, `not_interested`, `callback_requested`, `wrong_number`, `voicemail`, `no_conversation` come from Bolna's

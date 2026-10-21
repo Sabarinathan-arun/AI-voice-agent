@@ -3,16 +3,45 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Your Campaign</title>
+  <title>Your campaign · Intuvora</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%235b4bff'/%3E%3Crect x='8' y='13' width='3' height='6' rx='1.5' fill='white'/%3E%3Crect x='13' y='9' width='3' height='14' rx='1.5' fill='white'/%3E%3Crect x='18' y='11' width='3' height='10' rx='1.5' fill='white'/%3E%3Crect x='23' y='14' width='3' height='4' rx='1.5' fill='%2319c6a7'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<main>
-  <h1>Your campaign</h1>
+
+<header class="site-header scrolled">
+  <div class="container nav">
+    <a class="brand" href="/" aria-label="Intuvora home">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#5b4bff"/><rect x="8" y="13" width="3" height="6" rx="1.5" fill="#fff"/><rect x="13" y="9" width="3" height="14" rx="1.5" fill="#fff"/><rect x="18" y="11" width="3" height="10" rx="1.5" fill="#fff"/><rect x="23" y="14" width="3" height="4" rx="1.5" fill="#19c6a7"/></svg>
+      intuvora
+    </a>
+    <span class="muted" style="font-size:14px;font-weight:600">Campaign dashboard</span>
+  </div>
+</header>
+
+<main class="page">
+  <div class="page-head">
+    <div>
+      <h1>Your campaign</h1>
+      <p>Set up your offer, upload your leads and let the AI make the calls.</p>
+    </div>
+  </div>
+
+  <ol class="progress" aria-label="Campaign progress">
+    <li id="p-pay"><i>1</i><span>Payment</span></li>
+    <li id="p-setup"><i>2</i><span>Setup</span></li>
+    <li id="p-upload"><i>3</i><span>Leads</span></li>
+    <li id="p-call"><i>4</i><span>Calling</span></li>
+    <li id="p-results"><i>5</i><span>Results</span></li>
+  </ol>
+
   <div class="banner">
     <p><b>You can close this page.</b> Calls continue in the background. Save this link to come back and download
       your results within 24 hours.</p>
-    <div class="row link-row">
+    <div class="link-row">
       <input type="text" id="pagelink" readonly aria-label="Link to this campaign">
       <button type="button" class="secondary" id="copylink">Copy link</button>
     </div>
@@ -20,38 +49,67 @@
   <div class="msg" id="topmsg"></div>
 
   <section class="card" id="setup-card">
-    <h2>2. Sales setup</h2>
+    <div class="card-head">
+      <span class="num">2</span>
+      <div><h2>Sales setup</h2><p>What the AI should say about your business.</p></div>
+    </div>
     <form id="setup">
-      <label for="business_name">Business name *</label>
-      <input type="text" id="business_name" required maxlength="200">
-      <label for="business_description">About the business</label>
-      <textarea id="business_description" maxlength="2000" placeholder="What you do, where you operate, why customers trust you"></textarea>
-      <label for="product_details">Product / offer *</label>
-      <textarea id="product_details" required maxlength="5000" placeholder="Product, pricing, current offers, key benefits"></textarea>
-      <label for="sales_instructions">Sales instructions *</label>
-      <textarea id="sales_instructions" required maxlength="5000" placeholder="Goal of the call (e.g. book a demo), how to handle objections, what not to say"></textarea>
-      <label for="welcome_message">Opening line (optional)</label>
-      <input type="text" id="welcome_message" maxlength="500" placeholder="Hello {customer_name}, this is Priya from {business_name}…">
-      <label for="language">Call language</label>
-      <select id="language"><option>English</option></select>
+      <div class="form-grid">
+        <div>
+          <label for="business_name">Business name</label>
+          <input type="text" id="business_name" required maxlength="200" placeholder="e.g. Sunrise Solar">
+        </div>
+        <div>
+          <label for="language">Call language</label>
+          <select id="language"><option>English</option></select>
+        </div>
+        <div class="full">
+          <label for="business_description">About the business <span class="opt">(optional)</span></label>
+          <textarea id="business_description" maxlength="2000" placeholder="What you do, where you operate, why customers trust you"></textarea>
+        </div>
+        <div class="full">
+          <label for="product_details">Product / offer</label>
+          <textarea id="product_details" required maxlength="5000" placeholder="Product, pricing, current offers, key benefits"></textarea>
+        </div>
+        <div class="full">
+          <label for="sales_instructions">Sales instructions</label>
+          <textarea id="sales_instructions" required maxlength="5000" placeholder="Goal of the call (e.g. book a site visit), how to handle objections, what not to say"></textarea>
+        </div>
+        <div class="full">
+          <label for="welcome_message">Opening line <span class="opt">(optional)</span></label>
+          <input type="text" id="welcome_message" maxlength="500" placeholder="Hello {customer_name}, this is Priya from {business_name}…">
+          <p class="hint">Use {customer_name} and {business_name} — they're filled in on every call.</p>
+        </div>
+      </div>
       <div class="row"><button type="submit">Save setup</button></div>
       <div class="msg" id="setupmsg"></div>
     </form>
   </section>
 
   <section class="card" id="upload-card">
-    <h2>3. Upload leads</h2>
-    <p class="muted">Excel (.xlsx) or CSV with a <b>name</b> column and a <b>phone</b> column. Any other columns (city, company, last purchase…) are given to the AI agent to personalise each call.</p>
+    <div class="card-head">
+      <span class="num">3</span>
+      <div><h2>Upload leads</h2><p>Excel (.xlsx) or CSV with a name column and a phone column.</p></div>
+    </div>
     <form id="upload">
-      <input type="file" id="file" accept=".xlsx,.csv" required>
-      <div class="row"><button type="submit">Upload</button></div>
+      <label class="dropzone" id="dropzone" for="file">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></svg>
+        <b id="filelabel">Click to choose a file, or drag it here</b>
+        <span>Extra columns like city, company or last purchase help the AI personalise each call.</span>
+        <input type="file" id="file" accept=".xlsx,.csv">
+      </label>
+      <div class="row"><button type="submit">Upload leads</button></div>
       <div class="msg" id="uploadmsg"></div>
     </form>
   </section>
 
   <section class="card" id="start-card">
-    <h2>4. Start AI calls</h2>
-    <p class="muted" id="startinfo"></p>
+    <div class="card-head">
+      <span class="num">4</span>
+      <div><h2>Start AI calls</h2><p>The AI calls a few leads at a time until the list is done.</p></div>
+    </div>
+    <div class="start-status" id="startstatus"><span class="dot"></span><span id="startinfo"></span></div>
+    <div class="bar" id="startbar" hidden><span id="startbarfill"></span></div>
     <div class="row">
       <button id="start">Start calling</button>
       <button id="stop" class="danger" hidden>Stop remaining calls</button>
@@ -60,19 +118,26 @@
   </section>
 
   <section class="card" id="results-card">
-    <h2>5. Results</h2>
+    <div class="card-head">
+      <span class="num">5</span>
+      <div><h2>Results</h2><p>Updates live while calls are running.</p></div>
+    </div>
     <div class="stats" id="stats"></div>
     <div class="table-wrap">
       <table>
         <thead><tr><th>Name</th><th>Phone</th><th>Status</th><th>Outcome</th><th>Summary</th></tr></thead>
-        <tbody id="leads"><tr><td colspan="5" class="muted">No leads yet.</td></tr></tbody>
+        <tbody id="leads"><tr><td colspan="5" class="empty">No leads yet.</td></tr></tbody>
       </table>
     </div>
     <div class="row">
-      <a class="btn" id="export" href="#">6. Download results (.xlsx)</a>
+      <a class="btn" id="export" href="#">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>
+        Download results (.xlsx)
+      </a>
     </div>
   </section>
 </main>
+
 <script>
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -92,6 +157,23 @@ async function load() {
   render(await res.json());
 }
 
+function renderProgress(c, stats) {
+  const done = {
+    'p-pay': c.status !== 'pending_payment',
+    'p-setup': Boolean(c.business_name && c.product_details && c.sales_instructions),
+    'p-upload': stats.total > 0,
+    'p-call': ['completed', 'stopped'].includes(c.status),
+    'p-results': ['completed', 'stopped'].includes(c.status),
+  };
+  let currentSet = false;
+  for (const [key, isDone] of Object.entries(done)) {
+    const current = !isDone && !currentSet;
+    if (current) currentSet = true;
+    $(key).classList.toggle('done', isDone);
+    $(key).classList.toggle('current', current);
+  }
+}
+
 function render({campaign: c, stats, leads}) {
   const editable = c.status === 'paid';
   if (c.status === 'pending_payment') msg('topmsg', 'Waiting for payment confirmation…', true);
@@ -99,6 +181,7 @@ function render({campaign: c, stats, leads}) {
   $('setup-card').classList.toggle('locked', !editable);
   $('upload-card').classList.toggle('locked', !editable);
   $('start-card').classList.toggle('locked', !['paid', 'running'].includes(c.status));
+  renderProgress(c, stats);
 
   if (!formFilled) {
     for (const k of ['business_name', 'business_description', 'product_details', 'sales_instructions', 'welcome_message', 'language'])
@@ -110,20 +193,24 @@ function render({campaign: c, stats, leads}) {
   $('start').disabled = !ready;
   $('stop').hidden = c.status !== 'running';
   $('startinfo').textContent = {
+    pending_payment: 'Complete the payment to begin.',
     paid: ready ? `Ready to call ${stats.total} leads.` : 'Save the setup and upload leads first.',
     running: `Calling… ${stats.done} of ${stats.total} done.`,
     completed: `Finished: all ${stats.total} leads processed.`,
     stopped: `Stopped. ${stats.done} of ${stats.total} processed.`,
   }[c.status] || '';
+  $('startstatus').className = 'start-status ' + c.status;
+  $('startbar').hidden = !['running', 'completed', 'stopped'].includes(c.status);
+  $('startbarfill').style.width = stats.total ? `${Math.round(100 * stats.done / stats.total)}%` : '0';
 
   $('stats').innerHTML = `<div class="stat"><b>${stats.total}</b>Leads</div><div class="stat"><b>${stats.done}</b>Done</div>` +
     Object.entries(stats.by_outcome).map(([k, v]) => `<div class="stat"><b>${v}</b>${label(k)}</div>`).join('');
   $('leads').innerHTML = leads.length ? leads.map(l => `<tr>
-      <td>${esc(l.name)}</td><td>${esc(l.phone)}</td>
+      <td><b>${esc(l.name)}</b></td><td>${esc(l.phone)}</td>
       <td><span class="pill ${esc(l.status)}">${label(l.status)}</span></td>
       <td>${l.outcome ? `<span class="pill ${esc(l.outcome)}">${label(l.outcome)}</span>` : ''}</td>
       <td>${esc(l.summary || l.error || '')}${l.transcript ? `<details><summary>Transcript</summary><pre>${esc(l.transcript)}</pre></details>` : ''}</td>
-    </tr>`).join('') : '<tr><td colspan="5" class="muted">No leads yet.</td></tr>';
+    </tr>`).join('') : '<tr><td colspan="5" class="empty">No leads yet.</td></tr>';
   $('export').href = `/api/campaigns/${encodeURIComponent(id)}/export`;
 
   clearTimeout(timer);
@@ -139,8 +226,16 @@ $('setup').onsubmit = async (e) => {
   msg('setupmsg', 'Saved.', true); render(await res.json());
 };
 
+// File picker: show the chosen file's name, and accept drag and drop.
+const showFile = () => { const f = $('file').files[0]; $('filelabel').innerHTML = f ? `Selected: <span class="file-name">${esc(f.name)}</span>` : 'Click to choose a file, or drag it here'; };
+$('file').onchange = showFile;
+['dragenter', 'dragover'].forEach(ev => $('dropzone').addEventListener(ev, (e) => { e.preventDefault(); $('dropzone').classList.add('drag'); }));
+['dragleave', 'drop'].forEach(ev => $('dropzone').addEventListener(ev, (e) => { e.preventDefault(); $('dropzone').classList.remove('drag'); }));
+$('dropzone').addEventListener('drop', (e) => { if (e.dataTransfer.files.length) { $('file').files = e.dataTransfer.files; showFile(); } });
+
 $('upload').onsubmit = async (e) => {
   e.preventDefault();
+  if (!$('file').files[0]) return msg('uploadmsg', 'Choose a file first.');
   const fd = new FormData(); fd.append('file', $('file').files[0]);
   const res = await api('/leads', {method: 'POST', body: fd});
   if (!res.ok) return msg('uploadmsg', await errText(res));
