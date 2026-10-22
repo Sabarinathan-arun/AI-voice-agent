@@ -60,7 +60,10 @@ button.danger:hover { background: #8f1c13; }
 .nav { display: flex; align-items: center; justify-content: space-between; gap: 16px; height: 68px; }
 .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--fg); text-decoration: none; font-weight: 800; font-size: 20px; letter-spacing: -0.03em; }
 .on-dark .brand { color: #fff; }
-.brand-mark { width: 32px; height: 32px; }
+.brand-mark { flex: none; width: 34px; height: 34px; border-radius: 9px; background: #fff; display: grid; place-items: center; box-shadow: 0 0 0 1px var(--line); }
+.brand-mark img { height: 27px; width: auto; display: block; }
+.brand-mark.small { width: 28px; height: 28px; border-radius: 8px; }
+.brand-mark.small img { height: 22px; }
 .nav-links { display: flex; gap: 28px; }
 .nav-links a { color: var(--muted); text-decoration: none; font-size: 15px; font-weight: 600; }
 .on-dark .nav-links a { color: rgba(255, 255, 255, .72); }
