@@ -61,7 +61,7 @@ class FakeGoogle:
 def settings(tmp_path):
     return dataclasses.replace(load_settings(), max_concurrent_calls=2, app_base_url="http://testserver",
                                database_path=str(tmp_path / "accounts.db"), price_per_minute_paise=1000,
-                               min_topup_paise=10000, low_balance_paise=5000, google_client_id="test-client")
+                               min_topup_paise=10000, low_balance_paise=2000, google_client_id="test-client")
 
 
 @pytest.fixture

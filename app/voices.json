@@ -1,14 +1,18 @@
 [
   {
-    "id": "nila",
-    "name": "Nila",
-    "gender": "Female",
-    "description": "Warm and friendly Indian voice",
+    "id": "viraj",
+    "name": "Viraj",
+    "gender": "Male",
+    "description": "Warm, energetic and lively",
     "provider": "elevenlabs",
     "provider_config": {
-      "voice": "Nila",
-      "voice_id": "V9LCAAi4tTlqe9JadbCo",
-      "model": "eleven_turbo_v2_5"
+      "voice": "Viraj",
+      "voice_id": "iWNf11sz1GrUE4ppxTOL",
+      "model": "eleven_turbo_v2_5",
+      "temperature": 0.45,
+      "similarity_boost": 0.8,
+      "speed": 1,
+      "style": 0
     },
     "sample_url": ""
   }

@@ -302,16 +302,12 @@ a.link-btn { text-decoration: none; }
 .amount-neg { color: var(--fg); font-weight: 700; white-space: nowrap; }
 .empty-note { color: var(--muted); font-size: 14px; padding: 8px 0; }
 
-.voices { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
-.voice { position: relative; display: block; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; cursor: pointer; background: #fff; margin: 0; font-weight: 400; }
-.voice:hover { border-color: color-mix(in srgb, var(--brand) 40%, var(--line)); }
-.voice input { position: absolute; opacity: 0; }
-.voice:has(input:checked) { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
-.voice:has(input:focus-visible) { outline: 3px solid color-mix(in srgb, var(--brand) 45%, transparent); }
-.voice b { display: block; font-size: 15px; }
-.voice span { display: block; font-size: 13px; color: var(--muted); }
-.voice .tag { display: inline-block; margin-top: 8px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--brand); background: var(--brand-soft); padding: 2px 8px; border-radius: 99px; }
-.voice audio { width: 100%; height: 32px; margin-top: 10px; }
+.voice-card { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; background: #fff; }
+.voice-avatar { flex: none; width: 40px; height: 40px; border-radius: 50%; background: var(--brand-soft); color: var(--brand); display: grid; place-items: center; }
+.voice-info { flex: 1; min-width: 180px; }
+.voice-info b { display: block; font-size: 15px; }
+.voice-info span { display: block; font-size: 13px; color: var(--muted); }
+.voice-card audio { height: 36px; max-width: 100%; }
 
 .alert { padding: 12px 16px; border-radius: 12px; font-size: 14px; margin-top: 14px; }
 .alert.warn { background: var(--warn-soft); color: var(--warn); border: 1px solid #f5d9a8; }

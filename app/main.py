@@ -31,7 +31,7 @@ STATIC = Path(__file__).parent / "static"
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 SESSION_COOKIE = "intuvora_session"
 PROFILE_FIELDS = ("business_name", "business_description", "product_details", "sales_instructions",
-                  "welcome_message", "language", "voice")
+                  "welcome_message", "language")
 
 
 class GoogleLoginIn(BaseModel):
@@ -49,7 +49,6 @@ class SetupIn(BaseModel):
     sales_instructions: str = Field(min_length=1, max_length=5000)
     welcome_message: str = Field(default="", max_length=500)
     language: str = Field(default="English", max_length=50)
-    voice: str = Field(default="", max_length=100)
 
     @field_validator("language")
     @classmethod
@@ -71,6 +70,7 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, goog
     if not voices:
         raise RuntimeError(f"No voices configured in {settings.voices_path}")
     voices_by_id = {v["id"]: v for v in voices}
+    voice = voices[0]  # every campaign uses this voice, in every language
     worker = CampaignWorker(store, bolna, settings, accounts)
     secure_cookie = settings.app_base_url.startswith("https://")
 
@@ -171,9 +171,10 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, goog
             "languages": list(LANGUAGES),
         }
 
-    @app.get("/api/voices")
-    def list_voices():
-        return [{k: v.get(k, "") for k in ("id", "name", "gender", "description", "sample_url")} for v in voices]
+    @app.get("/api/voice")
+    def agent_voice():
+        """The AI voice used for calls, with a sample customers can play."""
+        return {k: voice.get(k, "") for k in ("name", "gender", "description", "sample_url")}
 
     # --- accounts ----------------------------------------------------------------
 
@@ -250,8 +251,6 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, goog
         campaign = get_campaign_or_404(campaign_id, user)
         require_status(campaign, "setup")
         data = body.model_dump()
-        if data["voice"] not in voices_by_id:
-            data["voice"] = voices[0]["id"]
         store.update_campaign(campaign_id, **data)
         accounts.save_profile(user["id"], {k: data[k] for k in PROFILE_FIELDS})
         return serialize(store.get_campaign(campaign_id))
@@ -288,7 +287,6 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, goog
         webhook_url = f"{settings.app_base_url}/api/webhooks/bolna"
         if not settings.app_base_url.startswith("https://"):
             webhook_url = None  # Bolna cannot reach a local URL; results are polled instead
-        voice = voices_by_id.get(campaign.get("voice") or "", voices[0])
         try:
             agent_id = bolna.create_agent(campaign, webhook_url, voice)
         except (BolnaError, OSError, ValueError) as exc:
@@ -319,9 +317,9 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, goog
     @app.get("/api/campaigns/{campaign_id}/export")
     def export_results(campaign_id: str, user: dict = Depends(current_user)):
         campaign = get_campaign_or_404(campaign_id, user)
-        voice = voices_by_id.get(campaign.get("voice") or "")
+        used = voices_by_id.get(campaign.get("voice") or "", voice)
         data = build_results_workbook(campaign, store.get_leads(campaign_id), accounts.campaign_usage(campaign_id),
-                                      voice_name=voice["name"] if voice else "",
+                                      voice_name=used["name"],
                                       price_per_minute_paise=settings.price_per_minute_paise)
         name = re.sub(r"[^A-Za-z0-9]+", "-", campaign.get("business_name") or "campaign").strip("-")[:40] or "campaign"
         return Response(

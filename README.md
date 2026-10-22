@@ -1,6 +1,6 @@
 # Intuvora — AI Sales Voice Agent
 
-Businesses create an account, top up a pay-as-you-go wallet, describe their offer, pick an AI voice and upload an
+Businesses create an account, top up a pay-as-you-go wallet, describe their offer and upload an
 Excel sheet of leads. An AI voice agent ([Bolna](https://www.bolna.ai)) calls every lead. Results (status, outcome,
 summary, transcript) appear live and download as a formatted Excel report.
 
@@ -15,10 +15,10 @@ are dropped 24 hours after the customer's last visit.
 |---|---|---|
 | 1. Account | "Continue with Google" — signs in or creates the account; Google handles passwords and recovery. | `app/google_auth.py`, `/login` |
 | 2. Wallet | Top up via a Razorpay Payment Link. On return the server asks Razorpay if it is paid and credits the wallet once. | `app/payments.py`, `/dashboard` |
-| 3. Business details | Business, offer, sales instructions, opening line, language and **AI voice**. Pre-filled from the last campaign. | `PUT /api/campaigns/{id}/setup` |
+| 3. Business details | Business, offer, sales instructions, opening line and language. Pre-filled from the last campaign. | `PUT /api/campaigns/{id}/setup` |
 | 4. Upload leads | `.xlsx` or `.csv` with name and phone columns. Every other column (city, product…) is passed to the AI for that lead. | `app/leads.py` |
-| 5. AI calling | Creates a Bolna agent from the campaign (script, welcome message, language, voice), calls up to `MAX_CONCURRENT_CALLS` leads at a time, and deletes the agent when done. | `app/bolna.py`, `app/worker.py` |
-| 6. Billing | Each answered call is charged per second at `PRICE_PER_MINUTE_PAISE` (₹10/min by default). Unanswered calls are free. Below `LOW_BALANCE_PAISE` (₹50) a campaign can't start and the next lead isn't called; calling resumes automatically after a top-up. Calls already running finish normally. | `app/worker.py` |
+| 5. AI calling | Creates a Bolna agent from the campaign (script, welcome message, language) with the Intuvora voice, calls up to `MAX_CONCURRENT_CALLS` leads at a time, and deletes the agent when done. | `app/bolna.py`, `app/worker.py` |
+| 6. Billing | Each answered call is charged per second at `PRICE_PER_MINUTE_PAISE` (₹10/min by default). Unanswered calls are free. Below `LOW_BALANCE_PAISE` (₹20) a campaign can't start and the next lead isn't called; calling resumes automatically after a top-up. Calls already running finish normally. | `app/worker.py` |
 | 7. Report | Excel with a **Summary** sheet (every campaign detail, outcome breakdown, talk time, cost), a formatted **Results** sheet and a **Transcripts** sheet. | `app/export.py` |
 
 ## Setup
@@ -42,7 +42,7 @@ first; Razorpay's redirect back to `localhost` works from your own browser.
 |---|---|---|
 | `PRICE_PER_MINUTE_PAISE` | `1000` | ₹10 per minute of answered calls, billed per second |
 | `MIN_TOPUP_PAISE` | `10000` | Smallest top-up, ₹100 |
-| `LOW_BALANCE_PAISE` | `5000` | Below ₹50: can't start, next lead not called |
+| `LOW_BALANCE_PAISE` | `2000` | Below ₹20: can't start, next lead not called |
 
 ### Google sign-in
 
@@ -54,24 +54,14 @@ first; Razorpay's redirect back to `localhost` works from your own browser.
 
 Open the app at `http://localhost:8000` (not `127.0.0.1`) so it matches the authorized origin.
 
-### AI voices
+### AI voice
 
-Customers choose from the voices in `app/voices.json`. Add one entry per voice from your Bolna account:
+Every campaign, in every language, uses the first voice in `app/voices.json` — currently **Viraj** (ElevenLabs,
+warm and energetic). Customers see its name and can play a sample on the campaign page.
 
-```json
-{
-  "id": "arjun",
-  "name": "Arjun",
-  "gender": "Male",
-  "description": "Confident, clear Indian English",
-  "provider": "elevenlabs",
-  "provider_config": {"voice": "Arjun", "voice_id": "<voice id from Bolna>", "model": "eleven_turbo_v2_5"},
-  "sample_url": ""
-}
-```
-
-`provider` and `provider_config` are copied into the agent's synthesizer, so use the values Bolna shows for that voice.
-`sample_url` (optional) is an audio file customers can play before choosing (e.g. `/static/voices/arjun.mp3`).
+- To change the voice, replace the entry with another voice from Bolna's voice list (`voice_id`, name, gender).
+- `sample_url`: paste the voice's `preview_url` from Bolna so customers can hear it before starting.
+- `temperature`, `similarity_boost`, `speed`, `style` tune how expressive the voice sounds.
 
 ### Bolna
 
@@ -115,7 +105,7 @@ app/
   worker.py      call dispatching, result polling, per-second billing
   leads.py       Excel/CSV lead parsing
   export.py      formatted Excel report
-  voices.json    AI voices customers can choose
+  voices.json    the AI voice used for every call
   static/        index.html, login.html, dashboard.html, campaign.html, common.js, style.css
 tests/
 ```

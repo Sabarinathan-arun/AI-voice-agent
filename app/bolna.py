@@ -53,7 +53,7 @@ def load_voices(path: str) -> list[dict]:
     return [v for v in voices if v.get("id") and v.get("provider") and v.get("provider_config")]
 
 
-def build_system_prompt(campaign: dict) -> str:
+def build_system_prompt(campaign: dict, agent_name: str = "") -> str:
     """The agent's sales script. {{customer_name}} and {{customer_details}} are filled by Bolna on each call."""
     language = campaign.get("language") or "English"
     business = campaign["business_name"]
@@ -73,6 +73,17 @@ Hinglish or Tanglish), follow how they talk.
 - Use the customer's name only now and then, not in every sentence.
 - If the customer interrupts, stop and listen. If you didn't catch something, ask them to repeat it naturally.
 - If asked whether you are a person or an AI, answer honestly that you are an AI assistant calling for {business}.
+{f"- Your name is {agent_name}. Use it if the customer asks who is calling." if agent_name else ""}
+
+## Sounding natural in {language} (this applies to every language)
+- Speak {language} the way a friendly local person speaks it on the phone: the everyday spoken form, never the
+  formal, bookish or news-reader style.
+- It is normal to keep common English words people use in conversation (offer, price, discount, booking, EMI)
+  instead of translating them into formal words nobody says.
+- Greet the way people naturally do in {language}, and use small natural fillers and acknowledgements of that
+  language now and then (the equivalents of "hmm", "okay", "right"), without overdoing it.
+- Match the customer's pace and energy: slower and calmer if they are unsure, brisk if they are busy.
+- Keep a polite, respectful tone for elders and use the respectful form of address common in {language}.
 
 ## About the business
 {campaign.get('business_description') or ''}
@@ -121,7 +132,8 @@ def build_agent_payload(template_path: str, campaign: dict, webhook_url: str | N
         if voice and tools.get("synthesizer") is not None:
             tools["synthesizer"]["provider"] = voice["provider"]
             tools["synthesizer"]["provider_config"] = copy.deepcopy(voice["provider_config"])
-    payload.setdefault("agent_prompts", {}).setdefault("task_1", {})["system_prompt"] = build_system_prompt(campaign)
+    payload.setdefault("agent_prompts", {}).setdefault("task_1", {})["system_prompt"] = build_system_prompt(
+        campaign, (voice or {}).get("name", ""))
     return payload
 
 
