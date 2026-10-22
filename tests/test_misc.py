@@ -26,7 +26,7 @@ def test_agent_payload_from_customer_details(settings):
     campaign = {"id": "abcdefgh123", "business_name": "Acme", "business_description": "Solar since 2015",
                 "product_details": "3kW system", "sales_instructions": "Book a visit",
                 "welcome_message": "Hi {customer_name}, {business_name} here", "language": "Hindi"}
-    voice = {"id": "v2", "provider": "polly", "provider_config": {"voice": "Kajal", "engine": "neural"}}
+    voice = {"id": "v2", "name": "Kajal", "provider": "polly", "provider_config": {"voice": "Kajal", "engine": "neural"}}
     payload = build_agent_payload(settings.bolna_agent_template, campaign, "https://x/hook", voice)
     cfg = payload["agent_config"]
     synth = cfg["tasks"][0]["tools_config"]["synthesizer"]
@@ -35,6 +35,7 @@ def test_agent_payload_from_customer_details(settings):
     assert cfg["webhook_url"] == "https://x/hook" and cfg["call_summary_enabled"] is True
     assert cfg["tasks"][0]["tools_config"]["transcriber"]["language"] == "hi"
     prompt = payload["agent_prompts"]["task_1"]["system_prompt"]
+    assert "Your name is Kajal" in prompt and "Sounding natural in Hindi" in prompt
     for text in ("Acme", "Solar since 2015", "3kW system", "Book a visit", "Speak in Hindi",
                  "{{customer_name}}", "{{customer_details}}", "How to sound human", "AI assistant calling for Acme"):
         assert text in prompt

@@ -10,7 +10,7 @@ from tests.conftest import signup, top_up
 
 SETUP = {"business_name": "Acme Solar", "product_details": "Rooftop solar, 3kW from 1.5L",
          "sales_instructions": "Book a free site visit.", "language": "Tamil",
-         "welcome_message": "Vanakkam {customer_name}", "voice": "nila"}
+         "welcome_message": "Vanakkam {customer_name}"}
 CSV = b"name,phone,City,Last Purchase\nAsha,9876543210,Chennai,Inverter\nRavi,9876543211,Madurai,\nMeena,9876543212,Salem,Panels\n"
 
 
@@ -49,14 +49,15 @@ def test_full_workflow_with_billing(client, bolna, payments):
     signup(client)
     cid = ready_campaign(client)
     res = client.post(f"/api/campaigns/{cid}/start")
-    assert res.status_code == 402 and "₹50" in res.json()["detail"]  # below the low-balance limit
+    assert res.status_code == 402 and "₹20" in res.json()["detail"]  # below the low-balance limit
     top_up(client, payments, 500)
 
     res = client.post(f"/api/campaigns/{cid}/start")
     assert res.status_code == 200 and res.json()["campaign"]["status"] == "running"
     assert "bolna_agent_id" not in res.json()["campaign"] and "user_id" not in res.json()["campaign"]
     agent = bolna.agents[0]
-    assert agent["language"] == "Tamil" and agent["_voice"]["id"] == "nila"
+    assert agent["language"] == "Tamil" and agent["_voice"]["id"] == "viraj"  # the one Intuvora voice
+    assert client.get("/api/voice").json()["name"] == "Viraj"
 
     client.worker.tick()
     assert len(bolna.calls) == 2  # concurrency limit
@@ -95,7 +96,7 @@ def test_full_workflow_with_billing(client, bolna, payments):
     wb = load_workbook(io.BytesIO(res.content))
     assert wb.sheetnames == ["Summary", "Results", "Transcripts"]
     summary = {r[0]: r[1] for r in wb["Summary"].iter_rows(values_only=True) if r[0]}
-    assert summary["Business name"] == "Acme Solar" and summary["AI voice"] == "Nila"
+    assert summary["Business name"] == "Acme Solar" and summary["AI voice"] == "Viraj"
     assert summary["Call language"] == "Tamil" and summary["Total leads"] == 3
     assert summary["Total cost (₹)"] == 16.17
     rows = list(wb["Results"].iter_rows(values_only=True))
@@ -110,12 +111,12 @@ def test_low_balance_pauses_and_resumes(client, bolna, payments, settings):
     cid = ready_campaign(client)
     client.post(f"/api/campaigns/{cid}/start")
     client.worker.tick()
-    # a long call drains the wallet below the ₹50 low-balance limit
-    bolna.executions["exec-0"] = {"id": "exec-0", "status": "completed", "conversation_duration": 312}
+    # a long call drains the wallet below the ₹20 low-balance limit
+    bolna.executions["exec-0"] = {"id": "exec-0", "status": "completed", "conversation_duration": 492}
     bolna.executions["exec-1"] = {"id": "exec-1", "status": "busy"}
     client.worker.tick()
     data = client.get(f"/api/campaigns/{cid}").json()
-    assert data["balance_paise"] == 10000 - 5200  # ₹48 left, below ₹50
+    assert data["balance_paise"] == 10000 - 8200  # ₹18 left, below ₹20
     assert data["campaign"]["low_balance"] is True and len(bolna.calls) == 2  # Meena not called yet
     top_up(client, payments, 200)
     client.worker.tick()
@@ -129,7 +130,6 @@ def test_campaigns_are_private_and_autofilled(client, payments):
     second = client.post("/api/campaigns").json()["campaign_id"]
     prefilled = client.get(f"/api/campaigns/{second}").json()["campaign"]
     assert prefilled["business_name"] == "Acme Solar" and prefilled["language"] == "Tamil"
-    assert prefilled["voice"] == "nila"
     assert [c["id"] for c in client.get("/api/campaigns").json()] == [second, cid]
 
     client.post("/api/auth/logout")

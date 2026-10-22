@@ -28,7 +28,7 @@ async function errText(res) {
 function msg(el, text, ok) { $(el).textContent = text; $(el).className = 'msg ' + (ok ? 'ok' : 'error'); }
 
 /* Header: name, balance chip and log out. */
-let pricePerMinute = 1000, lowBalance = 5000;
+let pricePerMinute = 1000, lowBalance = 2000;
 function showBalance(paise) {
   const chip = $('balance-chip');
   if (!chip) return;

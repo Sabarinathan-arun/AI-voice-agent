@@ -80,12 +80,19 @@
         </div>
         <div class="full">
           <label for="welcome_message">Opening line <span class="opt">(optional)</span></label>
-          <input type="text" id="welcome_message" maxlength="500" placeholder="Hello {customer_name}, this is Priya from {business_name}…">
+          <input type="text" id="welcome_message" maxlength="500" placeholder="Hello {customer_name}, this is Viraj from {business_name}…">
           <p class="hint">Use {customer_name} and {business_name} — they're filled in on every call.</p>
         </div>
         <div class="full">
-          <label>AI voice</label>
-          <div class="voices" id="voices" role="radiogroup" aria-label="AI voice"></div>
+          <label>Your AI voice</label>
+          <div class="voice-card" id="voice-card">
+            <div class="voice-avatar" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg></div>
+            <div class="voice-info">
+              <b id="voice-name">AI voice</b>
+              <span id="voice-desc">Used for every call, in your chosen language.</span>
+            </div>
+            <audio id="voice-sample" controls preload="none" hidden></audio>
+          </div>
         </div>
       </div>
       <div class="row"><button type="submit">Save setup</button></div>
@@ -122,7 +129,7 @@
       <span>Unanswered calls: <b>free</b></span>
       <span>Wallet: <b id="wallet">₹0.00</b></span>
     </div>
-    <div class="alert warn" id="lowbalance" hidden>Calling is paused because your wallet is below <span id="lowlimit">₹50</span>. <a href="/dashboard#wallet">Top up</a> and calls continue automatically.</div>
+    <div class="alert warn" id="lowbalance" hidden>Calling is paused because your wallet is below <span id="lowlimit">₹20</span>. <a href="/dashboard#wallet">Top up</a> and calls continue automatically.</div>
     <div class="row">
       <button id="start">Start calling</button>
       <button id="stop" class="danger" hidden>Stop remaining calls</button>
@@ -159,16 +166,12 @@ const api = (path, opts) => call(`/api/campaigns/${encodeURIComponent(id)}${path
 const FIELDS = ['business_name', 'business_description', 'product_details', 'sales_instructions', 'welcome_message', 'language'];
 let timer = null, formFilled = false;
 
-function renderVoices(voices) {
-  $('voices').innerHTML = voices.map((v, i) => `<label class="voice">
-      <input type="radio" name="voice" value="${esc(v.id)}" ${i === 0 ? 'checked' : ''}>
-      <b>${esc(v.name)}</b>
-      <span>${esc(v.description)}</span>
-      ${v.gender ? `<span class="tag">${esc(v.gender)}</span>` : ''}
-      ${v.sample_url ? `<audio controls preload="none" src="${esc(v.sample_url)}"></audio>` : ''}
-    </label>`).join('');
+function renderVoice(v) {
+  $('voice-name').textContent = [v.name, v.gender].filter(Boolean).join(' · ');
+  $('voice-desc').textContent = `${v.description ? v.description + '. ' : ''}Used for every call, in your chosen language.`;
+  if (v.sample_url) { $('voice-sample').src = v.sample_url; $('voice-sample').hidden = false; }
+  if (v.name) $('welcome_message').placeholder = `Hello {customer_name}, this is ${v.name} from {business_name}…`;
 }
-const selectedVoice = () => (document.querySelector('input[name=voice]:checked') || {}).value || '';
 
 async function load() {
   const res = await api('');
@@ -204,8 +207,6 @@ function render({campaign: c, stats, leads, balance_paise}) {
 
   if (!formFilled) {
     for (const k of FIELDS) if (c[k]) $(k).value = c[k];
-    const v = c.voice && document.querySelector(`input[name=voice][value="${CSS.escape(c.voice)}"]`);
-    if (v) v.checked = true;
     formFilled = true;
   }
   const ready = c.business_name && c.product_details && c.sales_instructions && stats.total > 0;
@@ -239,7 +240,7 @@ function render({campaign: c, stats, leads, balance_paise}) {
 
 $('setup').onsubmit = async (e) => {
   e.preventDefault();
-  const body = {voice: selectedVoice()};
+  const body = {};
   for (const k of FIELDS) body[k] = $(k).value.trim();
   const res = await api('/setup', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
   if (!res.ok) return msg('setupmsg', await errText(res));
@@ -294,7 +295,7 @@ $('stop').onclick = async () => {
     $('language').innerHTML = cfg.languages.map(l => `<option>${esc(l)}</option>`).join('');
     $('rate').textContent = rupees(cfg.price_per_minute_paise).replace(/\.00$/, '');
     $('lowlimit').textContent = rupees(cfg.low_balance_paise).replace(/\.00$/, '');
-    renderVoices(await (await fetch('/api/voices')).json());
+    renderVoice(await (await fetch('/api/voice')).json());
   } catch (e) {}
   await initHeader();
   if (!id) { msg('topmsg', 'Missing campaign id.'); return; }
