@@ -2,7 +2,6 @@
 a formatted Results sheet (one row per lead) and a Transcripts sheet."""
 
 import io
-import json
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -68,29 +67,6 @@ def _duration(seconds) -> str:
         return ""
     seconds = int(round(float(seconds)))
     return f"{seconds // 60}:{seconds % 60:02d}"
-
-
-def _extracted(value) -> str:
-    if not value:
-        return ""
-    try:
-        data = json.loads(value)
-    except ValueError:
-        return str(value)
-    parts = []
-
-    def walk(prefix, item):
-        if isinstance(item, dict):
-            if any(k in item for k in ("value", "subjective")) and len(item) <= 3:
-                parts.append(f"{prefix}: {item.get('value') or item.get('subjective')}")
-            else:
-                for k, v in item.items():
-                    walk(_label(k), v)
-        elif item not in (None, ""):
-            parts.append(f"{prefix}: {item}")
-
-    walk("", data)
-    return "; ".join(p.lstrip(": ") for p in parts)
 
 
 def _rupees(paise) -> float:
@@ -183,6 +159,8 @@ def build_results_workbook(campaign: dict, leads: list[dict], usage: dict | None
     row = _write_section(ws, row, "Results overview")
     row = _write_pair(ws, row, "Total leads", total)
     row = _write_pair(ws, row, "Conversations (answered)", reached)
+    row = _write_pair(ws, row, "Interested", sum(1 for l in leads if l.get("outcome") == "interested"))
+    row = _write_pair(ws, row, "Calls booked (time agreed)", sum(1 for l in leads if l.get("callback_time")))
     row = _write_pair(ws, row, "Not reached (no answer, busy, failed)", not_reached)
     row = _write_pair(ws, row, "Answer rate", (reached / total) if total else 0, "0%")
 
@@ -228,8 +206,8 @@ def build_results_workbook(campaign: dict, leads: list[dict], usage: dict | None
     rs = wb.create_sheet("Results")
     columns = ([("#", 6), ("Name", 22), ("Phone", 17)]
                + [(f["label"], 18) for f in detail_fields]
-               + [("Call status", 15), ("Outcome", 20), ("Summary", 60), ("Talk time", 11), ("Cost (₹)", 12),
-                  ("Called at (IST)", 21), ("Extracted details", 40), ("Recording", 14), ("Notes", 28)])
+               + [("Call status", 15), ("Outcome", 16), ("Call booked for", 20), ("Summary", 60), ("Key points", 40),
+                  ("Talk time", 11), ("Cost (₹)", 12), ("Called at (IST)", 21)])
     for col, (title, width) in enumerate(columns, start=1):
         c = rs.cell(row=1, column=col, value=_safe(title))
         c.font = Font(bold=True, color="FFFFFF")
@@ -239,17 +217,17 @@ def build_results_workbook(campaign: dict, leads: list[dict], usage: dict | None
         rs.column_dimensions[get_column_letter(col)].width = width
     rs.row_dimensions[1].height = 28
     outcome_col = 3 + len(detail_fields) + 2
-    cost_col = outcome_col + 3
-    recording_col = outcome_col + 6
+    booked_col = outcome_col + 1
+    cost_col = outcome_col + 5
 
     for i, lead in enumerate(leads, start=1):
         details = lead.get("details") or {}
         values = ([i, lead.get("name"), lead.get("phone")]
                   + [details.get(f["key"]) for f in detail_fields]
-                  + [_label(lead.get("status")), _label(lead.get("outcome")), lead.get("summary"),
-                     _duration(lead.get("duration_seconds")), _rupees(lead.get("cost_paise")),
-                     _ist(lead.get("called_at")), _extracted(lead.get("extracted_data")),
-                     "Listen" if lead.get("recording_url") else "", lead.get("error")])
+                  + ["Answered" if lead.get("status") == "completed" else _label(lead.get("status")),
+                     _label(lead.get("outcome")), lead.get("callback_time"),
+                     lead.get("summary"), lead.get("key_points"), _duration(lead.get("duration_seconds")),
+                     _rupees(lead.get("cost_paise")), _ist(lead.get("called_at"))])
         r = i + 1
         for col, value in enumerate(values, start=1):
             c = rs.cell(row=r, column=col, value=_safe(value) if value not in (None, "") else None)
@@ -262,10 +240,8 @@ def build_results_workbook(campaign: dict, leads: list[dict], usage: dict | None
             oc = rs.cell(row=r, column=outcome_col)
             oc.fill = PatternFill("solid", fgColor=fill)
             oc.font = Font(bold=True, color=font)
-        if lead.get("recording_url"):
-            link = rs.cell(row=r, column=recording_col)
-            link.hyperlink = lead["recording_url"]
-            link.font = Font(color=BRAND, underline="single")
+        if lead.get("callback_time"):
+            rs.cell(row=r, column=booked_col).font = Font(bold=True, color="0F7B5F")
         if i % 2 == 0:
             for col in range(1, len(columns) + 1):
                 cell = rs.cell(row=r, column=col)

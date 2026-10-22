@@ -56,6 +56,10 @@
       <span class="num">1</span>
       <div><h2>Sales setup</h2><p>What the AI should say about your business.</p></div>
     </div>
+    <div class="alert info" id="prefilled" hidden>
+      Filled in from your last campaign — check the details and change anything that's different.
+      <button type="button" class="link-btn" id="clearform">Clear form</button>
+    </div>
     <form id="setup">
       <div class="form-grid">
         <div>
@@ -84,15 +88,9 @@
           <p class="hint">Use {customer_name} and {business_name} — they're filled in on every call.</p>
         </div>
         <div class="full">
-          <label>Your AI voice</label>
-          <div class="voice-card" id="voice-card">
-            <div class="voice-avatar" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg></div>
-            <div class="voice-info">
-              <b id="voice-name">AI voice</b>
-              <span id="voice-desc">Used for every call, in your chosen language.</span>
-            </div>
-            <audio id="voice-sample" controls preload="none" hidden></audio>
-          </div>
+          <label>Choose your AI agent</label>
+          <div class="voices" id="voices" role="radiogroup" aria-label="AI agent"></div>
+          <p class="hint">Both agents use the same sales script and speak your chosen language.</p>
         </div>
       </div>
       <div class="row"><button type="submit">Save setup</button></div>
@@ -145,8 +143,8 @@
     <div class="stats" id="stats"></div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Name</th><th>Phone</th><th>Status</th><th>Outcome</th><th>Summary</th></tr></thead>
-        <tbody id="leads"><tr><td colspan="5" class="empty">No leads yet.</td></tr></tbody>
+        <thead><tr><th>Name</th><th>Phone</th><th>Status</th><th>Outcome</th><th>Call booked for</th><th>Summary</th></tr></thead>
+        <tbody id="leads"><tr><td colspan="6" class="empty">No leads yet.</td></tr></tbody>
       </table>
     </div>
     <div class="row">
@@ -166,11 +164,22 @@ const api = (path, opts) => call(`/api/campaigns/${encodeURIComponent(id)}${path
 const FIELDS = ['business_name', 'business_description', 'product_details', 'sales_instructions', 'welcome_message', 'language'];
 let timer = null, formFilled = false;
 
-function renderVoice(v) {
-  $('voice-name').textContent = [v.name, v.gender].filter(Boolean).join(' · ');
-  $('voice-desc').textContent = `${v.description ? v.description + '. ' : ''}Used for every call, in your chosen language.`;
-  if (v.sample_url) { $('voice-sample').src = v.sample_url; $('voice-sample').hidden = false; }
-  if (v.name) $('welcome_message').placeholder = `Hello {customer_name}, this is ${v.name} from {business_name}…`;
+function renderVoices(voices) {
+  $('voices').innerHTML = voices.map((v, i) => `<label class="voice">
+      <input type="radio" name="voice" value="${esc(v.id)}" ${i === 0 ? 'checked' : ''}>
+      <span class="voice-top">
+        <span class="voice-avatar ${v.gender === 'Female' ? 'f' : 'm'}" aria-hidden="true">${esc((v.name || '?')[0])}</span>
+        <span><b>${esc(v.name)}</b><span class="voice-meta">${esc(v.gender || '')}${v.description ? ' · ' + esc(v.description) : ''}</span></span>
+      </span>
+      ${v.sample_url ? `<audio controls preload="none" src="${esc(v.sample_url)}"></audio>` : ''}
+    </label>`).join('');
+  document.querySelectorAll('input[name=voice]').forEach(r => r.onchange = updatePlaceholder);
+  updatePlaceholder();
+}
+function selectedVoice() { return (document.querySelector('input[name=voice]:checked') || {}).value || ''; }
+function updatePlaceholder() {
+  const label = document.querySelector('input[name=voice]:checked')?.closest('label')?.querySelector('b')?.textContent;
+  if (label) $('welcome_message').placeholder = `Hello {customer_name}, this is ${label} from {business_name}…`;
 }
 
 async function load() {
@@ -206,7 +215,10 @@ function render({campaign: c, stats, leads, balance_paise}) {
   $('lowbalance').hidden = !(c.status === 'running' && c.low_balance);
 
   if (!formFilled) {
+    $('prefilled').hidden = !(c.prefilled && c.status === 'setup');
     for (const k of FIELDS) if (c[k]) $(k).value = c[k];
+    const v = c.voice && document.querySelector(`input[name=voice][value="${CSS.escape(c.voice)}"]`);
+    if (v) { v.checked = true; updatePlaceholder(); }
     formFilled = true;
   }
   const ready = c.business_name && c.product_details && c.sales_instructions && stats.total > 0;
@@ -224,23 +236,31 @@ function render({campaign: c, stats, leads, balance_paise}) {
   $('startbarfill').style.width = stats.total ? `${Math.round(100 * stats.done / stats.total)}%` : '0';
 
   $('stats').innerHTML = `<div class="stat"><b>${stats.total}</b>Leads</div><div class="stat"><b>${stats.done}</b>Done</div>` +
+    `<div class="stat"><b>${stats.booked}</b>Calls booked</div>` +
     `<div class="stat"><b>${minutes(stats.seconds)}</b>Talk time</div><div class="stat"><b>${rupees(stats.cost_paise)}</b>Cost so far</div>` +
     Object.entries(stats.by_outcome).map(([k, v]) => `<div class="stat"><b>${v}</b>${label(k)}</div>`).join('');
   $('leads').innerHTML = leads.length ? leads.map(l => `<tr>
       <td><b>${esc(l.name)}</b></td><td>${esc(l.phone)}</td>
-      <td><span class="pill ${esc(l.status)}">${label(l.status)}</span></td>
+      <td><span class="pill ${esc(l.status)}">${l.status === 'completed' ? 'Answered' : label(l.status)}</span></td>
       <td>${l.outcome ? `<span class="pill ${esc(l.outcome)}">${label(l.outcome)}</span>` : ''}</td>
-      <td>${esc(l.summary || l.error || '')}${l.transcript ? `<details><summary>Transcript</summary><pre>${esc(l.transcript)}</pre></details>` : ''}</td>
-    </tr>`).join('') : '<tr><td colspan="5" class="empty">No leads yet.</td></tr>';
+      <td>${l.callback_time ? `<b class="booked">${esc(l.callback_time)}</b>` : ''}</td>
+      <td>${esc(l.summary || '')}${l.transcript ? `<details><summary>Transcript</summary><pre>${esc(l.transcript)}</pre></details>` : ''}</td>
+    </tr>`).join('') : '<tr><td colspan="6" class="empty">No leads yet.</td></tr>';
   $('export').href = `/api/campaigns/${encodeURIComponent(id)}/export`;
 
   clearTimeout(timer);
   if (['running', 'stopped'].includes(c.status)) timer = setTimeout(load, 4000);
 }
 
+$('clearform').onclick = () => {
+  for (const k of FIELDS) if (k !== 'language') $(k).value = '';
+  $('prefilled').hidden = true;
+  $('business_name').focus();
+};
+
 $('setup').onsubmit = async (e) => {
   e.preventDefault();
-  const body = {};
+  const body = {voice: selectedVoice()};
   for (const k of FIELDS) body[k] = $(k).value.trim();
   const res = await api('/setup', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
   if (!res.ok) return msg('setupmsg', await errText(res));
@@ -295,7 +315,7 @@ $('stop').onclick = async () => {
     $('language').innerHTML = cfg.languages.map(l => `<option>${esc(l)}</option>`).join('');
     $('rate').textContent = rupees(cfg.price_per_minute_paise).replace(/\.00$/, '');
     $('lowlimit').textContent = rupees(cfg.low_balance_paise).replace(/\.00$/, '');
-    renderVoice(await (await fetch('/api/voice')).json());
+    renderVoices(await (await fetch('/api/voices')).json());
   } catch (e) {}
   await initHeader();
   if (!id) { msg('topmsg', 'Missing campaign id.'); return; }

@@ -17,7 +17,7 @@ def test_export_neutralises_formulas():
     ws = wb["Results"]
     assert ws["B2"].value.startswith("'=")
     assert ws["C2"].value == "+919876543210"
-    assert ws["F2"].value == "'+cmd"
+    assert ws["G2"].value == "'+cmd"
     summary = {r[0]: r[1] for r in wb["Summary"].iter_rows(values_only=True) if r[0]}
     assert summary["Business name"] == "'=cmd()"
 
@@ -29,6 +29,10 @@ def test_agent_payload_from_customer_details(settings):
     voice = {"id": "v2", "name": "Kajal", "provider": "polly", "provider_config": {"voice": "Kajal", "engine": "neural"}}
     payload = build_agent_payload(settings.bolna_agent_template, campaign, "https://x/hook", voice)
     cfg = payload["agent_config"]
+    llm = cfg["tasks"][0]["tools_config"]["llm_agent"]["llm_config"]
+    assert "interested or not_interested" in llm["extraction_details"] and "callback_time" in llm["extraction_details"]
+    assert llm["summarization_details"] and llm["request_json"] is False
+    assert "extraction_details" not in cfg  # Bolna reads it from llm_config
     synth = cfg["tasks"][0]["tools_config"]["synthesizer"]
     assert synth["provider"] == "polly" and synth["provider_config"] == {"voice": "Kajal", "engine": "neural"}
     assert cfg["agent_welcome_message"] == "Hi {{customer_name}}, Acme here"
@@ -78,7 +82,8 @@ def test_razorpay_payment_link(settings):
 def test_voices_file_is_valid(settings):
     from app.bolna import load_voices
     voices = load_voices(settings.voices_path)
-    assert voices and len({v["id"] for v in voices}) == len(voices)
+    assert [v["name"] for v in voices] == ["Arjun", "Kavya"]
+    assert len({v["id"] for v in voices}) == len(voices)
     for v in voices:
         assert v["name"] and v["provider"] and v["provider_config"]
 

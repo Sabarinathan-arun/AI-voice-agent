@@ -16,6 +16,13 @@ IN_FLIGHT = ("dialing", "queued", "initiated", "ringing", "in-progress", "call-d
 NOT_REACHED = {"no-answer": "no_answer", "busy": "busy", "failed": "failed", "error": "failed",
                "canceled": "cancelled", "cancelled": "cancelled", "stopped": "cancelled",
                "balance-low": "failed"}
+POSITIVE = {"interested", "callback_requested", "callback", "call_back", "yes", "hot", "warm", "booked",
+            "meeting_booked", "visit_booked", "demo_booked", "positive"}
+NEGATIVE = {"not_interested", "no", "cold", "declined", "negative", "do_not_call", "dnd"}
+NEGATIVE_CUES = ("not interested", "no interest", "declined", "refused", "don't call", "do not call",
+                 "not looking", "already has", "already have", "said no", "not keen", "busy, no")
+POSITIVE_CUES = ("interested", "agreed", "book", "visit", "demo", "meeting", "call back", "callback",
+                 "send details", "send the details", "wants to know", "asked about", "follow up", "follow-up")
 
 
 def _first(data: dict, *keys):
@@ -79,16 +86,22 @@ def parse_execution(execution: dict) -> dict:
 
     if status not in TERMINAL_STATUSES and status not in IN_FLIGHT:
         status = "in-progress"  # unrecognised intermediate status; the call timeout still applies
+    callback = _find_extracted(extracted, "callback time", "callback_time", "call back time", "appointment",
+                               "meeting time", "visit time")
+    if callback and callback.strip().lower() in ("", "none", "null", "n/a", "na", "no", "empty", "-"):
+        callback = None
     fields = {
         "status": status,
         "transcript": transcript,
         "summary": summary,
+        "callback_time": callback,
+        "key_points": _find_extracted(extracted, "key points", "key_points"),
         "duration_seconds": duration,
         "recording_url": _first(telephony, "recording_url"),
         "extracted_data": json.dumps(extracted) if extracted else None,
     }
     if status in TERMINAL_STATUSES:
-        fields["outcome"] = _outcome(status, extracted, transcript)
+        fields["outcome"] = _outcome(status, extracted, transcript, summary, callback)
         if not summary and transcript:
             fields["summary"] = transcript[:300]
         hangup = _first(telephony, "hangup_reason")
@@ -97,15 +110,27 @@ def parse_execution(execution: dict) -> dict:
     return fields
 
 
-def _outcome(status: str, extracted: dict, transcript: str | None) -> str:
+def _outcome(status: str, extracted: dict, transcript: str | None, summary: str | None = None,
+             callback: str | None = None) -> str:
+    """Answered calls are always classed as interested or not_interested (or wrong_number), never "completed"."""
     if status in NOT_REACHED:
         return NOT_REACHED[status]
-    value = _find_extracted(extracted, "outcome")
-    if value:
-        return str(value).strip().lower().replace(" ", "_")
     if not transcript or "user:" not in transcript.lower():
-        return "no_conversation"
-    return "completed"
+        return "no_answer"  # picked up by voicemail or hung up without speaking
+    value = (_find_extracted(extracted, "outcome") or "").strip().lower().replace(" ", "_").replace("-", "_")
+    if value == "wrong_number":
+        return value
+    if value in POSITIVE or callback:
+        return "interested"
+    if value in NEGATIVE:
+        return "not_interested"
+    # No usable extraction from Bolna: judge from the call summary (negative cues first: "not interested").
+    text = (summary or "").lower()
+    if any(cue in text for cue in NEGATIVE_CUES):
+        return "not_interested"
+    if any(cue in text for cue in POSITIVE_CUES):
+        return "interested"
+    return "not_interested"
 
 
 def call_cost_paise(seconds: float, price_per_minute_paise: int) -> int:

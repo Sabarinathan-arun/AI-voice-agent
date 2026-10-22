@@ -32,12 +32,34 @@ LANGUAGES = {
 }
 
 EXTRACTION_PROMPT = (
-    "outcome : One of interested, not_interested, callback_requested, wrong_number, "
-    "voicemail, no_conversation. Pick the one that best describes how the call ended.\n"
-    "interest_level : high, medium, low or none.\n"
-    "callback_time : The date/time the customer asked to be called back, if any, else empty.\n"
-    "key_points : One short sentence with objections, questions or commitments from the customer."
+    "outcome : interested or not_interested. interested = the customer showed interest, asked for details, "
+    "agreed to a visit/demo/meeting or asked to be called back; not_interested = the customer declined or was not "
+    "keen. Use wrong_number only if the person said it is the wrong number.\n"
+    "callback_time : The date and time the customer agreed for a call back, visit, demo or meeting, exactly as "
+    "they said it (for example \"Saturday 10 am\"); empty if none.\n"
+    "key_points : One short sentence with the customer's main questions, objections or commitments."
 )
+
+# How people really talk on the phone in each language: spoken forms, not the written/textbook grammar.
+SPOKEN_STYLE = {
+    "Hindi": "Use everyday Hindustani/Hinglish, not shuddh Hindi: say \"thank you\" or \"shukriya\" rather than "
+             "\"dhanyavaad\", \"please\" rather than \"kripya\", \"achha\", \"theek hai\", \"haan ji\".",
+    "Tamil": "Use spoken Tamil (pechu Tamil), not written Tamil: \"irukku\" not \"irukkiradhu\", \"sollunga\" not "
+             "\"sollungal\", \"pannreengala\" not \"seigireergala\"; \"seri\", \"aamaa\" and some English words are normal.",
+    "Telugu": "Use spoken Telugu, not bookish Telugu: \"enti\" not \"emiti\", \"cheppandi\", \"sare\", \"avunu andi\"; "
+              "mixing common English words is normal.",
+    "Kannada": "Use spoken Kannada, not written Kannada: shortened forms like \"maadtira\" instead of \"maaduttira\", "
+               "\"heli\", \"sari\", \"howdu\"; mixing common English words is normal.",
+    "Malayalam": "Use spoken Malayalam with the short everyday forms people use on calls, not literary Malayalam; "
+                 "\"sheri\", \"aano\" and common English words are normal.",
+    "Marathi": "Use everyday spoken Marathi, not formal Marathi; \"haan\", \"bara\", \"chalel\" and common English words "
+               "are normal.",
+    "Bengali": "Use everyday spoken Bengali (cholito bhasha), never the old formal style; \"accha\", \"thik ache\" and "
+               "common English words are normal.",
+    "Gujarati": "Use everyday spoken Gujarati, not formal Gujarati; \"haa\", \"saru\", \"barabar\" and common English "
+                "words are normal.",
+    "English": "Use simple, friendly Indian English as spoken on a phone call, not formal written English.",
+}
 
 SINGLE_BRACE_VAR = re.compile(r"(?<!\{)\{(\w+)\}(?!\})")
 
@@ -77,7 +99,9 @@ Hinglish or Tanglish), follow how they talk.
 
 ## Sounding natural in {language} (this applies to every language)
 - Speak {language} the way a friendly local person speaks it on the phone: the everyday spoken form, never the
-  formal, bookish or news-reader style.
+  formal, bookish or news-reader style. Do not sound grammatically perfect; real people use short forms, drop
+  words that are obvious, and keep sentences loose and simple.
+- {SPOKEN_STYLE.get(language, SPOKEN_STYLE["English"])}
 - It is normal to keep common English words people use in conversation (offer, price, discount, booking, EMI)
   instead of translating them into formal words nobody says.
 - Greet the way people naturally do in {language}, and use small natural fillers and acknowledgements of that
@@ -122,11 +146,13 @@ def build_agent_payload(template_path: str, campaign: dict, webhook_url: str | N
     cfg["agent_welcome_message"] = build_welcome_message(campaign)
     cfg["webhook_url"] = webhook_url
     cfg.setdefault("call_summary_enabled", True)  # Bolna returns a summary only when this is on
-    cfg.setdefault("summarization_details", "Summarise the sales call in 2-3 sentences.")
-    cfg.setdefault("extraction_details", EXTRACTION_PROMPT)
     code = LANGUAGES.get(campaign.get("language") or "English", "en")
     for task in cfg.get("tasks", []):
         tools = task.get("tools_config", {})
+        llm_config = tools.get("llm_agent", {}).get("llm_config")
+        if llm_config is not None:  # Bolna reads summary and extraction settings from the LLM config
+            llm_config.setdefault("summarization_details", "Summarise the sales call in 2-3 short sentences, in English.")
+            llm_config.setdefault("extraction_details", EXTRACTION_PROMPT)
         if tools.get("transcriber") is not None:
             tools["transcriber"]["language"] = code
         if voice and tools.get("synthesizer") is not None:

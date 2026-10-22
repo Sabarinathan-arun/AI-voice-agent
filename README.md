@@ -15,9 +15,9 @@ are dropped 24 hours after the customer's last visit.
 |---|---|---|
 | 1. Account | "Continue with Google" — signs in or creates the account; Google handles passwords and recovery. | `app/google_auth.py`, `/login` |
 | 2. Wallet | Top up via a Razorpay Payment Link. On return the server asks Razorpay if it is paid and credits the wallet once. | `app/payments.py`, `/dashboard` |
-| 3. Business details | Business, offer, sales instructions, opening line and language. Pre-filled from the last campaign. | `PUT /api/campaigns/{id}/setup` |
+| 3. Business details | Business, offer, sales instructions, opening line, language and AI agent (Arjun or Kavya). Pre-filled from the last campaign, with a "Clear form" option. | `PUT /api/campaigns/{id}/setup` |
 | 4. Upload leads | `.xlsx` or `.csv` with name and phone columns. Every other column (city, product…) is passed to the AI for that lead. | `app/leads.py` |
-| 5. AI calling | Creates a Bolna agent from the campaign (script, welcome message, language) with the Intuvora voice, calls up to `MAX_CONCURRENT_CALLS` leads at a time, and deletes the agent when done. | `app/bolna.py`, `app/worker.py` |
+| 5. AI calling | Creates a Bolna agent from the campaign (script, welcome message, language) with the chosen agent's voice, calls up to `MAX_CONCURRENT_CALLS` leads at a time, and deletes the agent when done. | `app/bolna.py`, `app/worker.py` |
 | 6. Billing | Each answered call is charged per second at `PRICE_PER_MINUTE_PAISE` (₹10/min by default). Unanswered calls are free. Below `LOW_BALANCE_PAISE` (₹20) a campaign can't start and the next lead isn't called; calling resumes automatically after a top-up. Calls already running finish normally. | `app/worker.py` |
 | 7. Report | Excel with a **Summary** sheet (every campaign detail, outcome breakdown, talk time, cost), a formatted **Results** sheet and a **Transcripts** sheet. | `app/export.py` |
 
@@ -54,14 +54,26 @@ first; Razorpay's redirect back to `localhost` works from your own browser.
 
 Open the app at `http://localhost:8000` (not `127.0.0.1`) so it matches the authorized origin.
 
-### AI voice
+### AI agents
 
-Every campaign, in every language, uses the first voice in `app/voices.json` — currently **Viraj** (ElevenLabs,
-warm and energetic). Customers see its name and can play a sample on the campaign page.
+Customers choose between the agents in `app/voices.json` — same settings and sales script, different voice:
 
-- To change the voice, replace the entry with another voice from Bolna's voice list (`voice_id`, name, gender).
-- `sample_url`: paste the voice's `preview_url` from Bolna so customers can hear it before starting.
+| Agent | Voice | Bolna / ElevenLabs voice |
+|---|---|---|
+| **Arjun** | Male, warm and energetic | Viraj (`iWNf11sz1GrUE4ppxTOL`) |
+| **Kavya** | Female, friendly and calm | Nila (`V9LCAAi4tTlqe9JadbCo`) |
+
+- `name` is what customers see and how the agent introduces itself on calls; `provider_config.voice` is the
+  original voice name in Bolna.
+- `sample_url`: paste each voice's full `preview_url` from Bolna's voice list to show a play button.
 - `temperature`, `similarity_boost`, `speed`, `style` tune how expressive the voice sounds.
+
+### Outcomes
+
+Answered calls are always marked **Interested** or **Not interested** (or **Wrong number**), never "completed".
+Bolna's extraction (configured in the agent's `llm_config`) decides; if it returns nothing, the call summary is used.
+A call where the customer agreed a time is marked Interested and the time appears under **Call booked for**.
+Calls nobody spoke on show **No answer**, as do unanswered and busy calls.
 
 ### Bolna
 
@@ -105,7 +117,7 @@ app/
   worker.py      call dispatching, result polling, per-second billing
   leads.py       Excel/CSV lead parsing
   export.py      formatted Excel report
-  voices.json    the AI voice used for every call
+  voices.json    the AI agents customers choose from (Arjun, Kavya)
   static/        index.html, login.html, dashboard.html, campaign.html, common.js, style.css
 tests/
 ```

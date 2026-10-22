@@ -101,7 +101,7 @@ class Store:
                     "status": "pending", "execution_id": None, "outcome": None, "summary": None,
                     "transcript": None, "duration_seconds": None, "recording_url": None,
                     "extracted_data": None, "error": None, "called_at": None,
-                    "billed": False, "cost_paise": 0,
+                    "billed": False, "cost_paise": 0, "callback_time": None, "key_points": None,
                 })
                 self._next_lead_id += 1
             self._leads[campaign_id] = rows

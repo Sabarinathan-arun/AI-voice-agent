@@ -10,7 +10,7 @@ from tests.conftest import signup, top_up
 
 SETUP = {"business_name": "Acme Solar", "product_details": "Rooftop solar, 3kW from 1.5L",
          "sales_instructions": "Book a free site visit.", "language": "Tamil",
-         "welcome_message": "Vanakkam {customer_name}"}
+         "welcome_message": "Vanakkam {customer_name}", "voice": "kavya"}
 CSV = b"name,phone,City,Last Purchase\nAsha,9876543210,Chennai,Inverter\nRavi,9876543211,Madurai,\nMeena,9876543212,Salem,Panels\n"
 
 
@@ -56,8 +56,8 @@ def test_full_workflow_with_billing(client, bolna, payments):
     assert res.status_code == 200 and res.json()["campaign"]["status"] == "running"
     assert "bolna_agent_id" not in res.json()["campaign"] and "user_id" not in res.json()["campaign"]
     agent = bolna.agents[0]
-    assert agent["language"] == "Tamil" and agent["_voice"]["id"] == "viraj"  # the one Intuvora voice
-    assert client.get("/api/voice").json()["name"] == "Viraj"
+    assert agent["language"] == "Tamil" and agent["_voice"]["id"] == "kavya"  # the agent the customer chose
+    assert [v["name"] for v in client.get("/api/voices").json()] == ["Arjun", "Kavya"]
 
     client.worker.tick()
     assert len(bolna.calls) == 2  # concurrency limit
@@ -67,7 +67,9 @@ def test_full_workflow_with_billing(client, bolna, payments):
 
     bolna.executions["exec-0"] = {
         "id": "exec-0", "status": "completed", "transcript": "assistant: hi\nuser: yes please",
-        "summary": "Asha booked a site visit.", "extracted_data": {"outcome": "Interested"},
+        "summary": "Asha booked a site visit.",
+        "extracted_data": {"General": {"Outcome": {"value": "Interested"}, "Callback time": {"value": "Saturday 10 am"},
+                                       "Key points": {"value": "Asked about subsidy"}}},
         "conversation_duration": 90, "telephony_data": {"recording_url": "https://rec/0"},
     }
     bolna.executions["exec-1"] = {"id": "exec-1", "status": "no-answer"}
@@ -85,7 +87,9 @@ def test_full_workflow_with_billing(client, bolna, payments):
     assert data["balance_paise"] == 50000 - 1617
     by_name = {l["name"]: l for l in data["leads"]}
     assert by_name["Ravi"]["cost_paise"] == 0  # unanswered calls are free
-    assert by_name["Asha"]["outcome"] == "interested"
+    assert by_name["Asha"]["outcome"] == "interested" and by_name["Asha"]["callback_time"] == "Saturday 10 am"
+    assert by_name["Meena"]["outcome"] == "no_answer"  # picked up but never spoke
+    assert data["stats"]["booked"] == 1
     assert bolna.deleted == ["agent-1"]
 
     history = client.get("/api/wallet").json()["history"]
@@ -96,13 +100,15 @@ def test_full_workflow_with_billing(client, bolna, payments):
     wb = load_workbook(io.BytesIO(res.content))
     assert wb.sheetnames == ["Summary", "Results", "Transcripts"]
     summary = {r[0]: r[1] for r in wb["Summary"].iter_rows(values_only=True) if r[0]}
-    assert summary["Business name"] == "Acme Solar" and summary["AI voice"] == "Viraj"
+    assert summary["Business name"] == "Acme Solar" and summary["AI voice"] == "Kavya"
     assert summary["Call language"] == "Tamil" and summary["Total leads"] == 3
     assert summary["Total cost (₹)"] == 16.17
     rows = list(wb["Results"].iter_rows(values_only=True))
-    assert rows[0][:5] == ("#", "Name", "Phone", "City", "Last Purchase")
-    assert rows[1][1:7] == ("Asha", "+919876543210", "Chennai", "Inverter", "Completed", "Interested")
-    assert rows[1][8] == "1:30" and rows[1][9] == 15.0
+    assert rows[0] == ("#", "Name", "Phone", "City", "Last Purchase", "Call status", "Outcome", "Call booked for",
+                       "Summary", "Key points", "Talk time", "Cost (₹)", "Called at (IST)")
+    assert rows[1][1:8] == ("Asha", "+919876543210", "Chennai", "Inverter", "Answered", "Interested", "Saturday 10 am")
+    assert rows[1][9] == "Asked about subsidy" and rows[1][10] == "1:30" and rows[1][11] == 15.0
+    assert summary["Calls booked (time agreed)"] == 1
 
 
 def test_low_balance_pauses_and_resumes(client, bolna, payments, settings):
@@ -130,6 +136,7 @@ def test_campaigns_are_private_and_autofilled(client, payments):
     second = client.post("/api/campaigns").json()["campaign_id"]
     prefilled = client.get(f"/api/campaigns/{second}").json()["campaign"]
     assert prefilled["business_name"] == "Acme Solar" and prefilled["language"] == "Tamil"
+    assert prefilled["voice"] == "kavya" and prefilled["prefilled"] is True
     assert [c["id"] for c in client.get("/api/campaigns").json()] == [second, cid]
 
     client.post("/api/auth/logout")
@@ -189,7 +196,7 @@ def test_call_cost():
 def test_parse_execution_variants():
     f = parse_execution({"status": "completed", "transcript": [{"role": "user", "content": "hi"}],
                          "extracted_data": json.dumps({"outcome": {"value": "callback requested"}})})
-    assert f["outcome"] == "callback_requested" and f["transcript"] == "user: hi" and f["summary"] == "user: hi"
+    assert f["outcome"] == "interested" and f["transcript"] == "user: hi" and f["summary"] == "user: hi"
     assert parse_execution({"status": "scheduled"})["status"] == "in-progress"
     assert "outcome" not in parse_execution({"status": "ringing"})
     assert "outcome" not in parse_execution({"status": "call-disconnected"})
@@ -204,3 +211,19 @@ def test_parse_execution_nested_extraction():
     })
     assert f["summary"] == "Customer wants a demo." and f["outcome"] == "interested"
     assert f["duration_seconds"] == 16 and f["recording_url"].endswith("/x")
+
+
+def test_answered_calls_are_interested_or_not():
+    talk = "assistant: hello\nuser: tell me"
+    base = {"status": "completed", "transcript": talk}
+    assert parse_execution({**base, "extracted_data": {"outcome": "not interested"}})["outcome"] == "not_interested"
+    assert parse_execution({**base, "extracted_data": {"outcome": "wrong number"}})["outcome"] == "wrong_number"
+    # a booked time means interested even without an outcome
+    f = parse_execution({**base, "extracted_data": {"callback_time": "tomorrow 5 pm"}})
+    assert f["outcome"] == "interested" and f["callback_time"] == "tomorrow 5 pm"
+    assert parse_execution({**base, "extracted_data": {"callback_time": "none"}})["callback_time"] is None
+    # no extraction from Bolna: judged from the summary, never "completed"
+    assert parse_execution({**base, "summary": "Customer is not interested at the moment."})["outcome"] == "not_interested"
+    assert parse_execution({**base, "summary": "Customer agreed to a site visit."})["outcome"] == "interested"
+    assert parse_execution({**base, "summary": "Short chat."})["outcome"] == "not_interested"
+    assert parse_execution({"status": "completed", "transcript": "assistant: hello"})["outcome"] == "no_answer"
