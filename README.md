@@ -4,16 +4,17 @@ Businesses create an account, top up a pay-as-you-go wallet, describe their offe
 Excel sheet of leads. An AI voice agent ([Bolna](https://www.bolna.ai)) calls every lead. Results (status, outcome,
 summary, transcript) appear live and download as a formatted Excel report.
 
-**What is stored:** customer accounts, wallet balances, top-ups, per-campaign usage totals and each customer's
-last-used business details (for auto-fill) — in a SQLite file (`data/accounts.db`).
-**What is never stored:** lead lists, phone numbers, transcripts and call results. They live in server memory only and
-are dropped 24 hours after the customer's last visit.
+**Storage:** a PostgreSQL database ([Supabase](https://supabase.com) free tier) in a private `intuvora` schema —
+accounts, wallet balances and a transaction log, top-ups, usage, saved business details, campaigns and leads.
+Campaigns survive restarts and carry on calling. **Lead lists and call results are deleted
+`RESULTS_RETENTION_DAYS` (7) days after a campaign finishes**; download the report before then.
+Without `DATABASE_URL` a local SQLite file is used (development and tests).
 
 ## Workflow
 
 | Step | What happens | Where |
 |---|---|---|
-| 1. Account | "Continue with Google" — signs in or creates the account; Google handles passwords and recovery. | `app/google_auth.py`, `/login` |
+| 1. Account | Email + password (with email confirmation and "Forgot password?") or "Continue with Google", all via Supabase Auth. | `app/supabase_auth.py`, `/login`, `/reset-password` |
 | 2. Wallet | Top up via a Razorpay Payment Link. On return the server asks Razorpay if it is paid and credits the wallet once. | `app/payments.py`, `/dashboard` |
 | 3. Business details | Business, offer, sales instructions, opening line, language and AI agent (Arjun or Kavya). Pre-filled from the last campaign, with a "Clear form" option. | `PUT /api/campaigns/{id}/setup` |
 | 4. Upload leads | `.xlsx` or `.csv` with name and phone columns. Every other column (city, product…) is passed to the AI for that lead. | `app/leads.py` |
@@ -28,12 +29,12 @@ python -m venv .venv
 source .venv/bin/activate        # Windows: .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 cp .env.example .env             # Windows: copy .env.example .env
-# fill in RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, BOLNA_API_KEY and GOOGLE_CLIENT_ID in .env
+# fill in RAZORPAY_*, BOLNA_API_KEY, SUPABASE_URL, SUPABASE_ANON_KEY (and DATABASE_URL) in .env
 python -m uvicorn app.main:create_app --factory
 # open http://localhost:8000
 ```
 
-The app refuses to start without the Razorpay keys, the Bolna API key and the Google client ID. Use Razorpay **test** keys (`rzp_test_...`)
+The app refuses to start without the Razorpay keys, the Bolna API key and the Supabase URL and anon key. Use Razorpay **test** keys (`rzp_test_...`)
 first; Razorpay's redirect back to `localhost` works from your own browser.
 
 ### Pricing settings (`.env`)
@@ -43,16 +44,32 @@ first; Razorpay's redirect back to `localhost` works from your own browser.
 | `PRICE_PER_MINUTE_PAISE` | `1000` | ₹10 per minute of answered calls, billed per second |
 | `MIN_TOPUP_PAISE` | `10000` | Smallest top-up, ₹100 |
 | `LOW_BALANCE_PAISE` | `2000` | Below ₹20: can't start, next lead not called |
+| `RESULTS_RETENTION_DAYS` | `7` | Days after a campaign finishes before its leads and results are deleted |
 
-### Google sign-in
+### Supabase (database + sign-in)
 
-1. [Google Cloud Console](https://console.cloud.google.com/) → create a project.
-2. **APIs & Services → OAuth consent screen**: External, app name "Intuvora", your support email. Publish it when going live.
-3. **Credentials → Create credentials → OAuth client ID → Web application.**
-4. **Authorized JavaScript origins:** `http://localhost:8000` (and `http://localhost`) for testing, plus `https://your-domain` when live.
-5. Copy the **Client ID** into `.env` as `GOOGLE_CLIENT_ID`. No client secret is needed.
+1. [supabase.com](https://supabase.com) → **New project** (region: Mumbai). Save the database password.
+2. **Database:** Connect → **Session pooler** connection string → `.env` as `DATABASE_URL`
+   (replace `[YOUR-PASSWORD]`). The app creates its tables in a private `intuvora` schema on first start;
+   it is not reachable through Supabase's public REST API.
+3. **API keys:** Project Settings → API → Project URL → `SUPABASE_URL`; `anon` `public` key → `SUPABASE_ANON_KEY`.
+   Never put the `service_role` key in the app.
+4. **Authentication → Sign In / Providers → Email:** enabled, "Confirm email" on, minimum password length 8.
+5. **Authentication → URL Configuration:** Site URL `https://your-domain`; Redirect URLs
+   `https://your-domain/login`, `https://your-domain/reset-password` (and the same with `http://localhost:8000` for testing).
+6. **Google:** Google Cloud Console → Credentials → OAuth client ID (Web application). Authorized redirect URI:
+   `https://<project-ref>.supabase.co/auth/v1/callback`. Paste the Client ID **and** Client Secret into
+   Supabase → Authentication → Providers → Google.
+7. **Emails:** Supabase's built-in mailer sends only a few emails per hour. For real customers add custom SMTP
+   (Authentication → Emails → SMTP, e.g. [Resend](https://resend.com) free tier with your domain) and edit the
+   "Confirm signup" and "Reset password" templates to say Intuvora.
 
-Open the app at `http://localhost:8000` (not `127.0.0.1`) so it matches the authorized origin.
+### Backups
+
+`.github/workflows/db-backup.yml` dumps the `intuvora` schema every night (02:00 IST), encrypts it with
+`BACKUP_PASSPHRASE` and keeps it 14 days as a workflow artifact (lead lists and sessions are left out).
+Add repository secrets `DATABASE_URL` and `BACKUP_PASSPHRASE`; it runs once the workflow is on the default branch.
+Restore: `gpg -d intuvora-DATE.sql.gz.gpg | gunzip | psql "$DATABASE_URL"`.
 
 ### AI agents
 
@@ -86,13 +103,19 @@ Calls nobody spoke on show **No answer**, as do unanswered and busy calls.
 ### Going live
 
 Deploy with **https** and set `APP_BASE_URL`. Session cookies are then marked secure, and each campaign agent gets
-`https://<your-domain>/api/webhooks/bolna` as its webhook. Run **one** server process; campaigns in progress live in
-that process's memory. Back up `data/accounts.db` — it holds customer wallets.
+`https://<your-domain>/api/webhooks/bolna` as its webhook. Run **one** server process (it runs the calling worker).
+
+**Render free plan:** start command `uvicorn app.main:create_app --factory --host 0.0.0.0 --port $PORT`; put every
+`.env` value in the service's Environment settings (never commit `.env`). Free services sleep after 15 minutes
+without visits, which pauses calling until the next request; all data is in Supabase, so nothing is lost and
+campaigns resume on wake. To keep it awake during campaigns, ping `https://your-domain/` every 5–10 minutes
+(e.g. UptimeRobot) or move to a paid instance. Supabase free projects pause after a week with no activity.
 
 ## Website
 
 - `/` — homepage (`app/static/index.html`). Demo video: set `DEMO_VIDEO_URL` near the bottom of the file.
-- `/login` — "Continue with Google" (sign in or create account).
+- `/login` — sign in, create account, forgot password, Google.
+- `/reset-password` — set a new password from the emailed link.
 - `/dashboard` — balance, top-up, new campaign, recent campaigns, usage & payments history.
 - `/campaign?id=…` — set up, upload, call, watch results, download the report.
 
@@ -102,22 +125,25 @@ that process's memory. Back up `data/accounts.db` — it holds customer wallets.
 python -m pytest -q
 ```
 
-Tests use stand-in Bolna and Razorpay clients (`tests/conftest.py`); no keys or calls needed.
+Tests use stand-in Bolna, Razorpay and Supabase Auth clients (`tests/conftest.py`) and a temporary SQLite file;
+no keys or calls needed. Set `TEST_DATABASE_URL=postgresql://…` to run them against PostgreSQL (the `intuvora`
+schema in that database is dropped between tests — use a throwaway database).
 
 ## Project layout
 
 ```
 app/
   main.py        FastAPI routes (create_app factory)
-  accounts.py    accounts, sessions, wallet, top-ups, usage, saved business details (SQLite)
-  google_auth.py verifies Google sign-in tokens
-  store.py       in-memory campaigns and leads (never written to disk)
+  db.py          database layer: PostgreSQL (Supabase) or SQLite, table definitions
+  accounts.py    accounts, sessions, wallet + transaction log, top-ups, usage, saved business details
+  supabase_auth.py checks Supabase sign-in tokens
+  store.py       campaigns and leads (deleted 7 days after a campaign finishes)
   payments.py    Razorpay Payment Links for top-ups
   bolna.py       Bolna API client, sales script, voices, call languages
   worker.py      call dispatching, result polling, per-second billing
   leads.py       Excel/CSV lead parsing
   export.py      formatted Excel report
   voices.json    the AI agents customers choose from (Arjun, Kavya)
-  static/        index.html, login.html, dashboard.html, campaign.html, common.js, style.css
+  static/        index.html, login.html, reset-password.html, dashboard.html, campaign.html, auth.js, common.js, style.css
 tests/
 ```

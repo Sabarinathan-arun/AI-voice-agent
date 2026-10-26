@@ -194,8 +194,8 @@ def build_results_workbook(campaign: dict, leads: list[dict], usage: dict | None
 
     row += 1
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
-    note = ws.cell(row=row, column=1, value="Lead details and call results are deleted from Intuvora 24 hours after "
-                                            "your last visit. Keep this file for your records.")
+    note = ws.cell(row=row, column=1, value="Lead details and call results are deleted from Intuvora 7 days after the "
+                                            "campaign finishes. Keep this file for your records.")
     note.font = Font(italic=True, color=MUTED, size=9)
     note.alignment = WRAP_TOP
     ws.page_setup.orientation = "portrait"

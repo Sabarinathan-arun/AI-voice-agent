@@ -12,6 +12,9 @@ from .store import Store, iso, utcnow
 
 log = logging.getLogger(__name__)
 
+IDLE_CHECK_SECONDS = 60
+PURGE_EVERY = timedelta(hours=1)
+
 IN_FLIGHT = ("dialing", "queued", "initiated", "ringing", "in-progress", "call-disconnected")
 NOT_REACHED = {"no-answer": "no_answer", "busy": "busy", "failed": "failed", "error": "failed",
                "canceled": "cancelled", "cancelled": "cancelled", "stopped": "cancelled",
@@ -145,8 +148,10 @@ class CampaignWorker:
         self.settings = settings
         self.accounts = accounts
         self._stop = threading.Event()
+        self._wake = threading.Event()
         self._thread: threading.Thread | None = None
         self._tick_lock = threading.Lock()
+        self._last_purge: datetime | None = None
 
     # --- lifecycle -------------------------------------------------------------
 
@@ -156,23 +161,39 @@ class CampaignWorker:
 
     def stop(self) -> None:
         self._stop.set()
+        self._wake.set()
         if self._thread:
             self._thread.join(timeout=10)
 
+    def wake(self) -> None:
+        """Check campaigns now (a campaign just started, or Bolna reported a call)."""
+        self._wake.set()
+
     def _run(self) -> None:
+        # Campaigns are saved in the database, so after a restart this simply carries on with them.
         while not self._stop.is_set():
+            active = False
             try:
-                self.tick()
+                active = self.tick()
             except Exception:
                 log.exception("worker tick failed")
-            self._stop.wait(self.settings.worker_interval_seconds)
+            # Busy: check every few seconds. Idle: rest (so the database can too) until woken or a minute passes.
+            self._wake.wait(self.settings.worker_interval_seconds if active else IDLE_CHECK_SECONDS)
+            self._wake.clear()
 
-    def tick(self, now: datetime | None = None) -> None:
+    def tick(self, now: datetime | None = None) -> bool:
+        """One pass over the active campaigns, plus the hourly clean-up. Returns True if any campaign is active."""
         with self._tick_lock:
             now = now or utcnow()
-            for campaign in self.store.campaigns_with_status("running", "stopped"):
+            campaigns = self.store.active_campaigns()
+            for campaign in campaigns:
                 self.process_campaign(campaign, now)
-            self.store.drop_idle(now)
+            if self._last_purge is None or now - self._last_purge >= PURGE_EVERY:
+                deleted = self.store.purge_expired(now, timedelta(days=self.settings.results_retention_days))
+                if deleted:
+                    log.info("deleted %d expired campaign(s) and their lead data", deleted)
+                self._last_purge = now
+            return bool(campaigns)
 
     # --- calls -----------------------------------------------------------------
 
@@ -244,7 +265,7 @@ class CampaignWorker:
         cost = call_cost_paise(seconds, self.settings.price_per_minute_paise)
         if cost <= 0 or not self.store.claim_billing(lead["id"]):
             return
-        campaign = self.store.get_campaign(lead["campaign_id"], touch=False)
+        campaign = self.store.get_campaign(lead["campaign_id"])
         if not campaign:
             return
         self.store.update_lead(lead["id"], cost_paise=cost)

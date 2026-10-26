@@ -1,4 +1,5 @@
 import dataclasses
+import os
 
 import pytest
 from fastapi.testclient import TestClient
@@ -46,22 +47,36 @@ class FakeRazorpay:
         self.paid.update(link["ref"] for link in self.links)
 
 
-class FakeGoogle:
-    """Stands in for Google sign-in: a credential "google:<email>" is a verified Google account."""
+class FakeAuth:
+    """Stands in for Supabase Auth: token "token:<email>" is a verified user, "unverified:<email>" is not."""
 
-    def verify(self, credential):
-        from app.google_auth import GoogleAuthError
-        if not credential.startswith("google:"):
-            raise GoogleAuthError("Google sign-in failed. Please try again.")
-        email = credential.split(":", 1)[1]
-        return {"sub": "sub-" + email, "email": email, "name": email.split("@")[0].title()}
+    def verify(self, access_token):
+        from app.supabase_auth import AuthError
+        kind, _, email = access_token.partition(":")
+        if kind == "unverified":
+            raise AuthError("Please confirm your email address first — check your inbox for the link.")
+        if kind != "token" or not email:
+            raise AuthError("Your sign-in has expired. Please sign in again.")
+        return {"sub": "auth-" + email, "email": email, "name": email.split("@")[0].title()}
+
+
+def _test_database_url(tmp_path) -> str:
+    """SQLite by default; set TEST_DATABASE_URL=postgresql://... to run the same tests on PostgreSQL."""
+    url = os.environ.get("TEST_DATABASE_URL")
+    if not url:
+        return str(tmp_path / "test.db")
+    import psycopg
+    with psycopg.connect(url, autocommit=True) as conn:  # fresh, empty schema for every test
+        conn.execute("DROP SCHEMA IF EXISTS intuvora CASCADE")
+    return url
 
 
 @pytest.fixture
 def settings(tmp_path):
     return dataclasses.replace(load_settings(), max_concurrent_calls=2, app_base_url="http://testserver",
-                               database_path=str(tmp_path / "accounts.db"), price_per_minute_paise=1000,
-                               min_topup_paise=10000, low_balance_paise=2000, google_client_id="test-client")
+                               database_url=_test_database_url(tmp_path), price_per_minute_paise=1000,
+                               min_topup_paise=10000, low_balance_paise=2000, results_retention_days=7,
+                               supabase_url="https://test.supabase.co", supabase_anon_key="anon")
 
 
 @pytest.fixture
@@ -76,7 +91,7 @@ def payments():
 
 @pytest.fixture
 def client(settings, bolna, payments):
-    app = create_app(settings, bolna=bolna, payments=payments, google=FakeGoogle(), run_worker=False)
+    app = create_app(settings, bolna=bolna, payments=payments, auth=FakeAuth(), run_worker=False)
     with TestClient(app) as c:
         c.worker = app.state.worker
         c.store = app.state.store
@@ -85,7 +100,7 @@ def client(settings, bolna, payments):
 
 
 def signup(client, email="owner@example.com"):
-    res = client.post("/api/auth/google", json={"credential": f"google:{email}"})
+    res = client.post("/api/auth/session", json={"access_token": f"token:{email}"})
     assert res.status_code == 200, res.text
     return res.json()
 

@@ -1,0 +1,54 @@
+# Nightly encrypted backup of the Intuvora database (accounts, wallets, payments, usage, campaigns).
+# Repository secrets: DATABASE_URL (Supabase session pooler string) and BACKUP_PASSPHRASE.
+# Download a backup from the run's "Artifacts", then restore with:
+#   gpg -d intuvora-YYYY-MM-DD.sql.gz.gpg | gunzip | psql "$DATABASE_URL"
+# Scheduled runs only happen on the repository's default branch.
+name: Database backup
+
+on:
+  schedule:
+    - cron: "30 20 * * *"   # 02:00 IST
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+    steps:
+      - name: Check secrets
+        id: check
+        run: |
+          if [ -z "$DATABASE_URL" ] || [ -z "$BACKUP_PASSPHRASE" ]; then
+            echo "DATABASE_URL or BACKUP_PASSPHRASE secret not set; skipping backup."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install pg_dump 17
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update -q && sudo apt-get install -yq postgresql-client-17
+
+      - name: Dump, compress and encrypt
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          mkdir backup
+          FILE="backup/intuvora-$(date -u +%F).sql.gz.gpg"
+          # Lead lists (phone numbers) and sign-in sessions are short-lived, so only their structure is kept.
+          /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" --schema=intuvora --no-owner --no-privileges \
+            --exclude-table-data=intuvora.leads --exclude-table-data=intuvora.sessions \
+            | gzip -9 \
+            | gpg --batch --yes --pinentry-mode loopback --passphrase "$BACKUP_PASSPHRASE" --symmetric --cipher-algo AES256 -o "$FILE"
+          ls -lh backup
+
+      - name: Keep for 14 days
+        if: steps.check.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: intuvora-db-backup
+          path: backup/
+          retention-days: 14

@@ -1,8 +1,9 @@
-"""FastAPI app: Google sign-in -> wallet top-up -> sales setup -> lead upload -> AI calls -> results -> export.
+"""FastAPI app: sign-in -> wallet top-up -> sales setup -> lead upload -> AI calls -> results -> export.
 
-Accounts, wallet and usage history are kept in SQLite (accounts.py). Each campaign's leads and results live in
-memory only and are dropped 24 hours after the last visit (store.py). Calls are billed per second at the
-per-minute rate; unanswered calls are free.
+Everything is saved in the database (Supabase PostgreSQL in production, SQLite locally): accounts, wallet,
+payments, usage and campaigns, so restarts never lose a running campaign. Lead data and call results are
+temporary and are deleted RESULTS_RETENTION_DAYS (7) after a campaign finishes. Calls are billed per second at
+the per-minute rate; unanswered calls are free.
 """
 
 import logging
@@ -20,7 +21,8 @@ from .accounts import Accounts
 from .bolna import LANGUAGES, BolnaError, load_voices, make_bolna_client
 from .config import Settings, load_settings
 from .export import build_results_workbook
-from .google_auth import GoogleAuthError, make_google_auth
+from .db import Database
+from .supabase_auth import AuthError, make_auth
 from .leads import LeadFileError, parse_leads
 from .payments import PaymentError, make_payment_provider
 from .store import Store, iso, utcnow
@@ -34,8 +36,8 @@ PROFILE_FIELDS = ("business_name", "business_description", "product_details", "s
                   "welcome_message", "language", "voice")
 
 
-class GoogleLoginIn(BaseModel):
-    credential: str = Field(min_length=10, max_length=5000)
+class SessionIn(BaseModel):
+    access_token: str = Field(min_length=10, max_length=10000)
 
 
 class TopupIn(BaseModel):
@@ -59,14 +61,15 @@ class SetupIn(BaseModel):
         return value
 
 
-def create_app(settings: Settings | None = None, bolna=None, payments=None, google=None,
+def create_app(settings: Settings | None = None, bolna=None, payments=None, auth=None,
                run_worker: bool = True) -> FastAPI:
     settings = settings or load_settings()
-    store = Store()
-    accounts = Accounts(settings.database_path)
+    database = Database(settings.database_url)
+    store = Store(database)
+    accounts = Accounts(database)
     bolna = bolna or make_bolna_client(settings)
     payments = payments or make_payment_provider(settings)
-    google = google or make_google_auth(settings)
+    auth = auth or make_auth(settings)
     voices = load_voices(settings.voices_path)
     if not voices:
         raise RuntimeError(f"No voices configured in {settings.voices_path}")
@@ -82,6 +85,7 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, goog
         yield
         if run_worker:
             worker.stop()
+        database.close()
 
     app = FastAPI(title="Intuvora AI Sales Agent", lifespan=lifespan)
     app.state.settings, app.state.store, app.state.worker, app.state.accounts = settings, store, worker, accounts
@@ -101,7 +105,8 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, goog
     def get_campaign_or_404(campaign_id: str, user: dict) -> dict:
         campaign = store.get_campaign(campaign_id)
         if not campaign or campaign["user_id"] != user["id"]:
-            raise HTTPException(404, "Campaign not found. Campaign data is kept for 24 hours only.")
+            raise HTTPException(404, f"Campaign not found. Campaign results are kept for "
+                                     f"{settings.results_retention_days} days after a campaign finishes.")
         return campaign
 
     def require_status(campaign: dict, *statuses: str) -> None:
@@ -152,6 +157,10 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, goog
     def login_page():
         return FileResponse(STATIC / "login.html")
 
+    @app.get("/reset-password", include_in_schema=False)
+    def reset_password_page():
+        return FileResponse(STATIC / "reset-password.html")
+
     @app.get("/dashboard", include_in_schema=False)
     def dashboard_page():
         return FileResponse(STATIC / "dashboard.html")
@@ -169,7 +178,9 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, goog
             "price_per_minute_paise": settings.price_per_minute_paise,
             "min_topup_paise": settings.min_topup_paise,
             "low_balance_paise": settings.low_balance_paise,
-            "google_client_id": settings.google_client_id,
+            "supabase_url": settings.supabase_url,
+            "supabase_anon_key": settings.supabase_anon_key,  # public key, meant for the browser
+            "results_retention_days": settings.results_retention_days,
             "max_leads": settings.max_leads_per_campaign,
             "languages": list(LANGUAGES),
         }
@@ -181,14 +192,14 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, goog
 
     # --- accounts ----------------------------------------------------------------
 
-    @app.post("/api/auth/google")
-    def google_login(body: GoogleLoginIn, response: Response):
-        """Sign in (or sign up) with a Google ID token from the "Continue with Google" button."""
+    @app.post("/api/auth/session")
+    def open_session(body: SessionIn, response: Response):
+        """After signing in with Supabase (email/password or Google), exchange its token for our session."""
         try:
-            identity = google.verify(body.credential)
-        except GoogleAuthError as exc:
+            identity = auth.verify(body.access_token)
+        except AuthError as exc:
             raise HTTPException(401, str(exc))
-        user = accounts.user_for_google(identity["sub"], identity["email"], identity["name"])
+        user = accounts.user_for_identity(identity["sub"], identity["email"], identity["name"])
         start_session(response, user)
         return me(user)
 
@@ -302,6 +313,7 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, goog
             raise HTTPException(502, f"Could not create the voice agent: {exc}")
         store.update_campaign(campaign_id, bolna_agent_id=agent_id, voice=voice["id"], status="running",
                               started_at=iso(utcnow()))
+        worker.wake()
         return serialize(store.get_campaign(campaign_id))
 
     @app.post("/api/campaigns/{campaign_id}/stop")
@@ -320,6 +332,7 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, goog
             raise HTTPException(400, "Invalid JSON")
         if isinstance(payload, dict):
             worker.handle_webhook(payload)
+            worker.wake()
         return {"received": True}
 
     @app.get("/api/campaigns/{campaign_id}/export")

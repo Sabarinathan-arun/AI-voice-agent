@@ -88,28 +88,29 @@ def test_voices_file_is_valid(settings):
         assert v["name"] and v["provider"] and v["provider_config"]
 
 
-def test_google_token_checks(settings):
-    from app.google_auth import GoogleAuth, GoogleAuthError
+def test_supabase_token_checks(settings):
     import pytest
+    from app.supabase_auth import AuthError, SupabaseAuth
 
     def handler(request: httpx.Request) -> httpx.Response:
-        token = request.url.params["id_token"]
-        base = {"iss": "https://accounts.google.com", "sub": "123", "email": "a@gmail.com",
-                "email_verified": "true", "name": "Asha"}
+        assert request.url.path == "/auth/v1/user" and request.headers["apikey"] == "anon"
+        token = request.headers["authorization"].removeprefix("Bearer ")
+        user = {"id": "u-123", "email": "asha@gmail.com", "email_confirmed_at": "2026-10-01T10:00:00Z",
+                "user_metadata": {"full_name": "Asha K"}}
         if token == "good":
-            return httpx.Response(200, json={**base, "aud": "my-client"})
-        if token == "other-app":
-            return httpx.Response(200, json={**base, "aud": "someone-else"})
-        if token == "unverified":
-            return httpx.Response(200, json={**base, "aud": "my-client", "email_verified": "false"})
-        return httpx.Response(400, json={"error": "invalid_token"})
+            return httpx.Response(200, json=user)
+        if token == "unconfirmed":
+            return httpx.Response(200, json={**user, "email_confirmed_at": None})
+        return httpx.Response(401, json={"msg": "invalid JWT"})
 
-    g = GoogleAuth(dataclasses.replace(settings, google_client_id="my-client"))
-    g._http = httpx.Client(transport=httpx.MockTransport(handler))
-    assert g.verify("good") == {"sub": "123", "email": "a@gmail.com", "name": "Asha"}
-    for bad in ("other-app", "unverified", "expired"):
-        with pytest.raises(GoogleAuthError):
-            g.verify(bad)
+    auth = SupabaseAuth(settings)
+    auth._http = httpx.Client(base_url="https://test.supabase.co", headers={"apikey": "anon"},
+                              transport=httpx.MockTransport(handler))
+    assert auth.verify("good") == {"sub": "u-123", "email": "asha@gmail.com", "name": "Asha K"}
+    with pytest.raises(AuthError, match="confirm your email"):
+        auth.verify("unconfirmed")
+    with pytest.raises(AuthError, match="expired"):
+        auth.verify("expired")
 
 
 def test_accounts_db_from_previous_version_upgrades(tmp_path):
@@ -122,9 +123,10 @@ def test_accounts_db_from_previous_version_upgrades(tmp_path):
                         INSERT INTO users VALUES ('u1', 'old@gmail.com', 'Old', 'scrypt$x$y', 2500, '2026-01-01');""")
     db.commit()
     db.close()
-    accounts = Accounts(str(path))
-    linked = accounts.user_for_google("g-1", "OLD@gmail.com", "Old User")
+    from app.db import Database
+    accounts = Accounts(Database(str(path)))
+    linked = accounts.user_for_identity("a-1", "OLD@gmail.com", "Old User")
     assert linked["id"] == "u1" and linked["balance_paise"] == 2500  # existing wallet kept
-    new = accounts.user_for_google("g-2", "new@gmail.com", "New")
+    new = accounts.user_for_identity("a-2", "new@gmail.com", "New")
     assert new["email"] == "new@gmail.com" and new["balance_paise"] == 0
-    assert accounts.user_for_google("g-2", "new@gmail.com", "New")["id"] == new["id"]
+    assert accounts.user_for_identity("a-2", "new@gmail.com", "New")["id"] == new["id"]

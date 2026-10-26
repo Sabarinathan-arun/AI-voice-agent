@@ -15,7 +15,9 @@ def _load_dotenv(path: Path) -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+        # .env wins over values already in the environment, so edits take effect even in a terminal that
+        # pre-loaded an older copy of the file (VS Code's python.terminal.useEnvFile).
+        os.environ[key.strip()] = value.strip().strip('"').strip("'")
 
 
 def _int(name: str, default: int) -> int:
@@ -25,7 +27,7 @@ def _int(name: str, default: int) -> int:
 @dataclass(frozen=True)
 class Settings:
     app_base_url: str
-    database_path: str
+    database_url: str
 
     razorpay_key_id: str
     razorpay_key_secret: str
@@ -34,7 +36,8 @@ class Settings:
     min_topup_paise: int
     low_balance_paise: int
 
-    google_client_id: str
+    supabase_url: str
+    supabase_anon_key: str
 
     bolna_api_key: str
     bolna_api_base: str
@@ -47,6 +50,7 @@ class Settings:
     default_country_code: str
     call_timeout_minutes: int
     worker_interval_seconds: int
+    results_retention_days: int
 
 
 def load_settings() -> Settings:
@@ -57,19 +61,23 @@ def load_settings() -> Settings:
     voices = os.environ.get("VOICES_FILE", "app/voices.json")
     if not os.path.isabs(voices):
         voices = str(ROOT / voices)
-    db_path = os.environ.get("DATABASE_PATH", "data/accounts.db")
-    if db_path != ":memory:" and not os.path.isabs(db_path):
-        db_path = str(ROOT / db_path)
+    # Supabase/PostgreSQL connection string; without one, a local SQLite file is used (development and tests).
+    database_url = os.environ.get("DATABASE_URL", "").strip()
+    if not database_url:
+        database_url = os.environ.get("DATABASE_PATH", "data/accounts.db")
+        if database_url != ":memory:" and not os.path.isabs(database_url):
+            database_url = str(ROOT / database_url)
     return Settings(
         app_base_url=os.environ.get("APP_BASE_URL", "http://localhost:8000").rstrip("/"),
-        database_path=db_path,
+        database_url=database_url,
         razorpay_key_id=os.environ.get("RAZORPAY_KEY_ID", ""),
         razorpay_key_secret=os.environ.get("RAZORPAY_KEY_SECRET", ""),
         price_currency=os.environ.get("PRICE_CURRENCY", "inr").lower(),
         price_per_minute_paise=_int("PRICE_PER_MINUTE_PAISE", 1000),
         min_topup_paise=_int("MIN_TOPUP_PAISE", 10000),
         low_balance_paise=_int("LOW_BALANCE_PAISE", 2000),
-        google_client_id=os.environ.get("GOOGLE_CLIENT_ID", ""),
+        supabase_url=os.environ.get("SUPABASE_URL", "").strip().rstrip("/"),
+        supabase_anon_key=os.environ.get("SUPABASE_ANON_KEY", "").strip(),
         bolna_api_key=os.environ.get("BOLNA_API_KEY", ""),
         bolna_api_base=os.environ.get("BOLNA_API_BASE", "https://api.bolna.ai").rstrip("/"),
         bolna_from_number=os.environ.get("BOLNA_FROM_NUMBER", ""),
@@ -80,4 +88,5 @@ def load_settings() -> Settings:
         default_country_code=os.environ.get("DEFAULT_COUNTRY_CODE", "91").lstrip("+"),
         call_timeout_minutes=_int("CALL_TIMEOUT_MINUTES", 30),
         worker_interval_seconds=_int("WORKER_INTERVAL_SECONDS", 5),
+        results_retention_days=_int("RESULTS_RETENTION_DAYS", 7),
     )

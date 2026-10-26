@@ -21,14 +21,16 @@ def ready_campaign(client, csv=CSV):
     return cid
 
 
-def test_google_sign_in_and_logout(client):
+def test_sign_in_and_logout(client):
     assert client.get("/api/me").status_code == 401
     me = signup(client)
     assert me["email"] == "owner@example.com" and me["name"] == "Owner" and me["balance_paise"] == 0
-    assert client.post("/api/auth/google", json={"credential": "forged-token-123"}).status_code == 401
+    assert client.post("/api/auth/session", json={"access_token": "forged-token-123"}).status_code == 401
+    res = client.post("/api/auth/session", json={"access_token": "unverified:new@example.com"})
+    assert res.status_code == 401 and "confirm your email" in res.json()["detail"]
     client.post("/api/auth/logout")
     assert client.get("/api/me").status_code == 401
-    assert signup(client)["id"] == me["id"]  # same Google account -> same wallet
+    assert signup(client)["id"] == me["id"]  # same account -> same wallet
 
 
 def test_topup_credited_once(client, payments):
@@ -179,13 +181,76 @@ def test_call_timeout(client, bolna, payments):
     assert data["campaign"]["status"] == "completed"
 
 
-def test_campaign_data_dropped_after_idle_day(client, payments):
+def test_lead_data_deleted_seven_days_after_finish(client, bolna, payments):
     signup(client)
-    cid = client.post("/api/campaigns").json()["campaign_id"]
-    client.worker.tick(utcnow() + timedelta(hours=25))
-    assert client.get(f"/api/campaigns/{cid}").status_code == 404
-    assert client.get("/api/me").status_code == 200  # the account itself stays
+    top_up(client, payments)
+    draft = client.post("/api/campaigns").json()["campaign_id"]           # never started
+    done = ready_campaign(client, b"name,phone\nA,9876543210\n")
+    client.post(f"/api/campaigns/{done}/start")
+    client.worker.tick()
+    bolna.executions["exec-0"] = {"id": "exec-0", "status": "completed", "transcript": "user: hi",
+                                  "conversation_duration": 30}
+    client.worker.tick()
+    assert client.get(f"/api/campaigns/{done}").json()["campaign"]["status"] == "completed"
 
+    client.worker._last_purge = None
+    client.worker.tick(utcnow() + timedelta(days=6))
+    assert client.get(f"/api/campaigns/{done}").status_code == 200       # still downloadable on day 6
+    assert client.get(f"/api/campaigns/{done}/export").status_code == 200
+    client.worker._last_purge = None
+    client.worker.tick(utcnow() + timedelta(days=8))
+    assert client.get(f"/api/campaigns/{done}").status_code == 404       # leads and results gone
+    assert client.get(f"/api/campaigns/{draft}").status_code == 404
+    assert client.store.get_leads(done) == []
+    history = client.get("/api/wallet").json()["history"]                  # cost totals are kept
+    assert any(h["type"] == "campaign" and h["amount_paise"] == -500 for h in history)
+    assert client.get("/api/me").status_code == 200
+
+
+def test_running_campaign_survives_a_restart(settings, bolna, payments):
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    from tests.conftest import FakeAuth
+
+    first = create_app(settings, bolna=bolna, payments=payments, auth=FakeAuth(), run_worker=False)
+    with TestClient(first) as c:
+        signup(c)
+        top_up(c, payments)
+        cid = ready_campaign(c)
+        c.post(f"/api/campaigns/{cid}/start")
+        first.state.worker.tick()                     # two calls in progress, one lead waiting
+        cookies = dict(c.cookies)
+    assert len(bolna.calls) == 2
+
+    # "crash": a brand-new app on the same database carries on with the campaign
+    second = create_app(settings, bolna=bolna, payments=payments, auth=FakeAuth(), run_worker=False)
+    with TestClient(second, cookies=cookies) as c:
+        for eid in ("exec-0", "exec-1"):
+            bolna.executions[eid] = {"id": eid, "status": "completed", "transcript": "user: yes",
+                                     "conversation_duration": 60, "extracted_data": {"outcome": "interested"}}
+        second.state.worker.tick()
+        assert len(bolna.calls) == 3                  # the waiting lead is called after the restart
+        bolna.executions["exec-2"] = {"id": "exec-2", "status": "no-answer"}
+        second.state.worker.tick()
+        data = c.get(f"/api/campaigns/{cid}").json()
+        assert data["campaign"]["status"] == "completed"
+        assert [l["outcome"] for l in data["leads"]] == ["interested", "interested", "no_answer"]
+        assert data["balance_paise"] == 50000 - 2000  # both answered calls billed exactly once
+
+
+def test_wallet_transaction_log(client, bolna, payments):
+    signup(client)
+    top_up(client, payments, 200)
+    cid = ready_campaign(client, b"name,phone\nA,9876543210\n")
+    client.post(f"/api/campaigns/{cid}/start")
+    client.worker.tick()
+    bolna.executions["exec-0"] = {"id": "exec-0", "status": "completed", "transcript": "user: hi",
+                                  "conversation_duration": 90}
+    client.worker.tick()
+    user = client.get("/api/me").json()
+    log = client.accounts.transactions(user["id"])
+    assert [(t["kind"], t["amount_paise"], t["balance_after_paise"]) for t in log] == [
+        ("call", -1500, 18500), ("topup", 20000, 20000)]
 
 def test_call_cost():
     assert call_cost_paise(0, 1000) == 0

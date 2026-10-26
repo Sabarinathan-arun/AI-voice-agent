@@ -266,7 +266,7 @@ pre { white-space: pre-wrap; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo,
 .auth-wrap { min-height: calc(100vh - 68px); display: grid; place-items: center; padding: 40px 20px; }
 .auth-card { width: 100%; max-width: 420px; background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 32px; box-shadow: var(--shadow); }
 .auth-card h1 { font-size: 26px; font-weight: 800; margin-bottom: 6px; }
-.auth-card > p { color: var(--muted); margin-bottom: 18px; }
+.auth-card h1 + p { color: var(--muted); margin-bottom: 18px; }
 .tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 4px; margin-bottom: 8px; }
 .tabs button { background: transparent; color: var(--muted); border: 0; padding: 9px; }
 .tabs button:hover { background: rgba(0, 0, 0, .03); }
@@ -274,7 +274,14 @@ pre { white-space: pre-wrap; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo,
 .auth-card form button[type=submit] { width: 100%; margin-top: 20px; }
 input[type=email], input[type=password], input[type=number] { width: 100%; padding: 11px 13px; border: 1px solid var(--line); border-radius: 10px; font: inherit; font-size: 15px; background: #fff; color: var(--fg); }
 input[type=email]:focus, input[type=password]:focus, input[type=number]:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
-.google-button { display: flex; justify-content: center; min-height: 44px; margin: 24px 0 8px; }
+.auth-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 8px; }
+.auth-row .link-btn { margin-left: auto; color: var(--brand); padding: 0; }
+.auth-note .link-btn { color: var(--brand); padding: 0; }
+.divider { display: flex; align-items: center; gap: 12px; margin: 20px 0; color: var(--muted); font-size: 13px; }
+.divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.google-btn { width: 100%; background: #fff; color: var(--fg); border: 1px solid var(--line); gap: 10px; }
+.google-btn:hover { background: #f6f7fb; }
+.auth-card .msg:not(:empty) { margin-top: 16px; }
 .auth-note { font-size: 13px; color: var(--muted); text-align: center; margin-top: 16px; }
 
 .nav-right { display: flex; align-items: center; gap: 12px; }

@@ -1,150 +1,166 @@
-"""In-memory campaign store. Lead lists and call results are never written to disk: a campaign lives only
-while the server runs. (Accounts and wallet balances are in accounts.py.)
+"""Campaigns and their leads, saved in the database so a crash, restart or redeploy never loses a running
+campaign.
 
-Finished sessions are dropped from memory after a while so the server does not grow forever.
+Lead data is temporary: a campaign and all its leads (names, phone numbers, transcripts, results) are permanently
+deleted RESULTS_RETENTION_DAYS after the campaign finishes (or after it was created, if it never started).
+Only the campaign's cost totals are kept, in the usage table (accounts.py).
 """
 
-import copy
-import threading
-from datetime import datetime, timedelta, timezone
+import json
+from datetime import datetime, timedelta
 
-IDLE_SESSION_LIFETIME = timedelta(hours=24)
+from .db import Database, iso, utcnow  # noqa: F401  (iso/utcnow re-exported for callers)
+
+CAMPAIGN_COLUMNS = ("id", "user_id", "status", "created_at", "finished_at")
+LEAD_COLUMNS = ("id", "campaign_id", "row_number", "status", "execution_id", "billed")
+
+NEW_CAMPAIGN = {
+    "business_name": None, "business_description": None, "product_details": None, "sales_instructions": None,
+    "welcome_message": None, "language": None, "voice": None,
+    "detail_fields": [],      # extra Excel columns: [{"key": "city", "label": "City"}, ...]
+    "bolna_agent_id": None,
+    "low_balance": False,     # calling paused until the wallet is topped up
+    "started_at": None,
+}
+NEW_LEAD = {
+    "outcome": None, "summary": None, "transcript": None, "duration_seconds": None, "recording_url": None,
+    "extracted_data": None, "error": None, "called_at": None, "cost_paise": 0, "callback_time": None,
+    "key_points": None,
+}
 
 
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+def _campaign(row: dict | None) -> dict | None:
+    if not row:
+        return None
+    campaign = {**NEW_CAMPAIGN, **json.loads(row["data"])}
+    campaign.update({k: row[k] for k in CAMPAIGN_COLUMNS})
+    return campaign
 
 
-def iso(dt: datetime) -> str:
-    return dt.isoformat(timespec="seconds")
+def _lead(row: dict | None) -> dict | None:
+    if not row:
+        return None
+    lead = {**NEW_LEAD, **json.loads(row["data"])}
+    lead.update({k: row[k] for k in LEAD_COLUMNS})
+    lead["billed"] = bool(lead["billed"])
+    return lead
+
+
+def _split(fields: dict, columns: tuple[str, ...]) -> tuple[dict, dict]:
+    cols = {k: v for k, v in fields.items() if k in columns}
+    rest = {k: v for k, v in fields.items() if k not in columns}
+    return cols, rest
 
 
 class Store:
-    def __init__(self):
-        self._lock = threading.Lock()
-        self._campaigns: dict[str, dict] = {}
-        self._leads: dict[str, list[dict]] = {}
-        self._next_lead_id = 1
-
-    def _touch(self, campaign: dict) -> None:
-        campaign["last_activity"] = utcnow()
+    def __init__(self, db: Database):
+        self.db = db
+        self._lock_clause = " FOR UPDATE" if db.postgres else ""
 
     # --- campaigns -----------------------------------------------------------
 
     def create_campaign(self, campaign_id: str, user_id: str, prefill: dict | None = None) -> None:
-        with self._lock:
-            self._campaigns[campaign_id] = {
-                "id": campaign_id,
-                "user_id": user_id,
-                "status": "setup",  # setup | running | completed | stopped
-                "created_at": iso(utcnow()),
-                "business_name": None,
-                "business_description": None,
-                "product_details": None,
-                "sales_instructions": None,
-                "welcome_message": None,
-                "language": None,
-                "voice": None,
-                "detail_fields": [],  # extra Excel columns: [{"key": "city", "label": "City"}, ...]
-                "bolna_agent_id": None,
-                "low_balance": False,  # calling paused until the wallet is topped up
-                "started_at": None,
-                "finished_at": None,
-                "last_activity": utcnow(),
-            }
-            self._campaigns[campaign_id].update(prefill or {})
-            self._leads[campaign_id] = []
+        data = {**NEW_CAMPAIGN, **(prefill or {})}
+        with self.db.tx() as db:
+            db.execute("INSERT INTO campaigns (id, user_id, status, created_at, data) VALUES (?, ?, 'setup', ?, ?)",
+                       (campaign_id, user_id, utcnow().isoformat(), json.dumps(data)))
 
-    def get_campaign(self, campaign_id: str, touch: bool = True) -> dict | None:
-        with self._lock:
-            campaign = self._campaigns.get(campaign_id)
-            if campaign and touch:
-                self._touch(campaign)
-            return copy.deepcopy(campaign)
+    def get_campaign(self, campaign_id: str) -> dict | None:
+        with self.db.tx() as db:
+            return _campaign(db.execute("SELECT * FROM campaigns WHERE id = ?", (campaign_id,)).fetchone())
 
     def update_campaign(self, campaign_id: str, **fields) -> None:
-        with self._lock:
-            campaign = self._campaigns.get(campaign_id)
-            if campaign:
-                campaign.update(fields)
-                self._touch(campaign)
+        cols, rest = _split(fields, CAMPAIGN_COLUMNS)
+        with self.db.tx() as db:
+            if rest:
+                row = db.execute("SELECT data FROM campaigns WHERE id = ?" + self._lock_clause,
+                                 (campaign_id,)).fetchone()
+                if not row:
+                    return
+                cols["data"] = json.dumps({**json.loads(row["data"]), **rest})
+            if cols:
+                db.execute(f"UPDATE campaigns SET {', '.join(f'{k} = ?' for k in cols)} WHERE id = ?",
+                           (*cols.values(), campaign_id))
 
     def campaigns_for_user(self, user_id: str) -> list[dict]:
-        with self._lock:
-            # newest first (dicts keep insertion order)
-            return [copy.deepcopy(c) for c in reversed(self._campaigns.values()) if c["user_id"] == user_id]
+        with self.db.tx() as db:
+            rows = db.execute("SELECT * FROM campaigns WHERE user_id = ? ORDER BY created_at DESC",
+                              (user_id,)).fetchall()
+        return [_campaign(r) for r in rows]
 
     def campaigns_with_status(self, *statuses: str) -> list[dict]:
-        with self._lock:
-            return [copy.deepcopy(c) for c in self._campaigns.values() if c["status"] in statuses]
+        marks = ",".join("?" for _ in statuses)
+        with self.db.tx() as db:
+            rows = db.execute(f"SELECT * FROM campaigns WHERE status IN ({marks})", statuses).fetchall()
+        return [_campaign(r) for r in rows]
 
-    def drop_idle(self, now: datetime) -> list[dict]:
-        """Forget sessions untouched for IDLE_SESSION_LIFETIME (never one that is still calling)."""
-        with self._lock:
-            idle = [c for c in self._campaigns.values()
-                    if c["status"] != "running" and now - c["last_activity"] > IDLE_SESSION_LIFETIME]
-            for c in idle:
-                del self._campaigns[c["id"]]
-                del self._leads[c["id"]]
-            return idle
+    def active_campaigns(self) -> list[dict]:
+        """Campaigns the worker must look after: calling, or stopped with calls still finishing."""
+        with self.db.tx() as db:
+            rows = db.execute("SELECT * FROM campaigns WHERE status = 'running' OR "
+                              "(status = 'stopped' AND finished_at IS NULL)").fetchall()
+        return [_campaign(r) for r in rows]
+
+    def purge_expired(self, now: datetime, retention: timedelta) -> int:
+        """Permanently delete campaigns (and their leads) past the retention period. Running ones are kept."""
+        cutoff = iso(now - retention)
+        with self.db.tx() as db:
+            return db.execute("DELETE FROM campaigns WHERE (finished_at IS NOT NULL AND finished_at < ?) "
+                              "OR (status = 'setup' AND created_at < ?)", (cutoff, cutoff)).rowcount
 
     # --- leads ---------------------------------------------------------------
 
     def replace_leads(self, campaign_id: str, leads: list[dict]) -> None:
-        with self._lock:
-            rows = []
-            for lead in leads:
-                rows.append({
-                    "id": self._next_lead_id, "campaign_id": campaign_id,
-                    "row_number": lead["row_number"], "name": lead["name"], "phone": lead["phone"],
-                    "details": dict(lead.get("details") or {}),
-                    "status": "pending", "execution_id": None, "outcome": None, "summary": None,
-                    "transcript": None, "duration_seconds": None, "recording_url": None,
-                    "extracted_data": None, "error": None, "called_at": None,
-                    "billed": False, "cost_paise": 0, "callback_time": None, "key_points": None,
-                })
-                self._next_lead_id += 1
-            self._leads[campaign_id] = rows
+        rows = [(campaign_id, lead["row_number"], "pending",
+                 json.dumps({**NEW_LEAD, "name": lead["name"], "phone": lead["phone"],
+                             "details": dict(lead.get("details") or {})}))
+                for lead in leads]
+        with self.db.tx() as db:
+            db.execute("DELETE FROM leads WHERE campaign_id = ?", (campaign_id,))
+            db.executemany("INSERT INTO leads (campaign_id, row_number, status, data) VALUES (?, ?, ?, ?)", rows)
 
     def get_leads(self, campaign_id: str) -> list[dict]:
-        with self._lock:
-            return copy.deepcopy(self._leads.get(campaign_id, []))
+        with self.db.tx() as db:
+            rows = db.execute("SELECT * FROM leads WHERE campaign_id = ? ORDER BY row_number, id",
+                              (campaign_id,)).fetchall()
+        return [_lead(r) for r in rows]
 
     def leads_with_status(self, campaign_id: str, statuses: tuple[str, ...], limit: int | None = None) -> list[dict]:
-        with self._lock:
-            found = [l for l in self._leads.get(campaign_id, []) if l["status"] in statuses]
-            return copy.deepcopy(found[:limit] if limit is not None else found)
+        marks = ",".join("?" for _ in statuses)
+        sql = f"SELECT * FROM leads WHERE campaign_id = ? AND status IN ({marks}) ORDER BY row_number, id"
+        params: list = [campaign_id, *statuses]
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        with self.db.tx() as db:
+            rows = db.execute(sql, params).fetchall()
+        return [_lead(r) for r in rows]
 
     def get_lead_by_execution(self, execution_id: str) -> dict | None:
-        with self._lock:
-            for leads in self._leads.values():
-                for lead in leads:
-                    if lead["execution_id"] == execution_id:
-                        return copy.deepcopy(lead)
-            return None
+        with self.db.tx() as db:
+            return _lead(db.execute("SELECT * FROM leads WHERE execution_id = ?", (execution_id,)).fetchone())
 
     def update_lead(self, lead_id: int, **fields) -> None:
-        with self._lock:
-            for leads in self._leads.values():
-                for lead in leads:
-                    if lead["id"] == lead_id:
-                        lead.update(fields)
-                        return
+        cols, rest = _split(fields, LEAD_COLUMNS)
+        cols.pop("id", None)
+        if "billed" in cols:
+            cols["billed"] = int(bool(cols["billed"]))
+        with self.db.tx() as db:
+            if rest:
+                row = db.execute("SELECT data FROM leads WHERE id = ?" + self._lock_clause, (lead_id,)).fetchone()
+                if not row:
+                    return
+                cols["data"] = json.dumps({**json.loads(row["data"]), **rest}, default=str)
+            if cols:
+                db.execute(f"UPDATE leads SET {', '.join(f'{k} = ?' for k in cols)} WHERE id = ?",
+                           (*cols.values(), lead_id))
 
     def claim_billing(self, lead_id: int) -> bool:
         """Mark a lead's call as billed; True only the first time (webhook and polling may both see it)."""
-        with self._lock:
-            for leads in self._leads.values():
-                for lead in leads:
-                    if lead["id"] == lead_id:
-                        if lead["billed"]:
-                            return False
-                        lead["billed"] = True
-                        return True
-            return False
+        with self.db.tx() as db:
+            return db.execute("UPDATE leads SET billed = 1 WHERE id = ? AND billed = 0", (lead_id,)).rowcount == 1
 
     def skip_pending_leads(self, campaign_id: str) -> None:
-        with self._lock:
-            for lead in self._leads.get(campaign_id, []):
-                if lead["status"] == "pending":
-                    lead["status"] = "skipped"
+        with self.db.tx() as db:
+            db.execute("UPDATE leads SET status = 'skipped' WHERE campaign_id = ? AND status = 'pending'",
+                       (campaign_id,))
