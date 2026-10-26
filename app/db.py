@@ -146,7 +146,9 @@ class Database:
                 conn.execute(f"SET search_path TO {PG_SCHEMA}")
                 conn.commit()
 
+            # check: test each connection before handing it out; Supabase drops connections left idle.
             self._pool = ConnectionPool(url, min_size=1, max_size=5, open=True, configure=configure,
+                                        check=ConnectionPool.check_connection,
                                         kwargs={"row_factory": dict_row, "prepare_threshold": None})
         else:
             self.path = url

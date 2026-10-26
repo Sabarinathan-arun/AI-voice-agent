@@ -215,9 +215,8 @@ class CampaignWorker:
             if self.store.leads_with_status(campaign["id"], ("pending",), limit=1):
                 return
         if not self.store.leads_with_status(campaign["id"], IN_FLIGHT, limit=1) and not campaign.get("finished_at"):
-            status = "completed" if campaign["status"] == "running" else campaign["status"]
-            self.store.update_campaign(campaign["id"], status=status, finished_at=iso(now))
-            self.remove_agent(campaign)
+            if self.store.finish_campaign(campaign["id"], iso(now)):  # keeps "stopped" if stopped meanwhile
+                self.remove_agent(campaign)
 
     def remove_agent(self, campaign: dict) -> None:
         """The campaign's agent is only needed while calling; delete it so nothing is kept at Bolna either."""
@@ -230,7 +229,9 @@ class CampaignWorker:
             log.warning("could not delete Bolna agent %s: %s", campaign["bolna_agent_id"], exc)
 
     def dial(self, campaign: dict, lead: dict, now: datetime) -> None:
-        self.store.update_lead(lead["id"], status="dialing", called_at=iso(now))
+        if not self.store.claim_dial(lead["id"]):  # the campaign was stopped since the lead was picked
+            return
+        self.store.update_lead(lead["id"], called_at=iso(now))
         try:
             execution_id = self.bolna.start_call(
                 campaign["bolna_agent_id"], lead["phone"], call_user_data(campaign, lead)
@@ -277,12 +278,22 @@ class CampaignWorker:
         execution_id = payload.get("id") or payload.get("execution_id")
         if not execution_id:
             return False
-        lead = self.store.get_lead_by_execution(str(execution_id))
-        if not lead:
-            return False
+        execution_id = str(execution_id)
         try:
-            self.apply_execution(lead, self.bolna.get_execution(lead["execution_id"]))
+            lead = self.store.get_lead_by_execution(execution_id)
+            execution = self.bolna.get_execution(execution_id)
         except BolnaError as exc:
             log.warning("webhook refresh failed for %s: %s", execution_id, exc)
             return False
+        if not lead:
+            # Not one we know: maybe the server stopped between placing the call and saving its id.
+            # Match it (as fetched from Bolna, not as posted) by the campaign's agent and the number called.
+            telephony = execution.get("telephony_data") or {}
+            phone = execution.get("user_number") or telephony.get("to_number") or ""
+            lead = self.store.find_lost_lead(str(execution.get("agent_id") or ""), str(phone))
+            if not lead:
+                return False
+            self.store.update_lead(lead["id"], execution_id=execution_id, error=None)
+            lead = {**lead, "execution_id": execution_id}
+        self.apply_execution(lead, execution)
         return True

@@ -292,3 +292,82 @@ def test_answered_calls_are_interested_or_not():
     assert parse_execution({**base, "summary": "Customer agreed to a site visit."})["outcome"] == "interested"
     assert parse_execution({**base, "summary": "Short chat."})["outcome"] == "not_interested"
     assert parse_execution({"status": "completed", "transcript": "assistant: hello"})["outcome"] == "no_answer"
+
+
+def test_campaign_starts_only_once(client, bolna, payments):
+    from app.bolna import BolnaError
+    signup(client)
+    top_up(client, payments)
+    cid = ready_campaign(client)
+    store = client.app.state.store
+    seen = []
+    real_create = bolna.create_agent
+
+    def create_agent(campaign, webhook_url, voice=None):
+        # A second click arriving while the agent is being created must not start the campaign again.
+        seen.append((store.get_campaign(cid)["status"], store.transition_campaign(cid, "setup", "starting")))
+        if len(seen) == 1:
+            raise BolnaError("Bolna is down")
+        return real_create(campaign, webhook_url, voice)
+
+    bolna.create_agent = create_agent
+    assert client.post(f"/api/campaigns/{cid}/start").status_code == 502
+    assert store.get_campaign(cid)["status"] == "setup"  # failed start can be retried
+    assert client.post(f"/api/campaigns/{cid}/start").json()["campaign"]["status"] == "running"
+    assert seen == [("starting", False), ("starting", False)]
+    assert client.post(f"/api/campaigns/{cid}/start").status_code == 409
+    assert len(bolna.agents) == 1
+
+
+def test_stop_during_last_call_stays_stopped(client, bolna, payments):
+    signup(client)
+    top_up(client, payments)
+    cid = ready_campaign(client, b"name,phone\nA,9876543210\nB,9876543211\n")
+    client.post(f"/api/campaigns/{cid}/start")
+    store = client.app.state.store
+    campaign = store.get_campaign(cid)  # the worker's copy, read while still running
+    leads = store.leads_with_status(cid, ("pending",))
+    client.post(f"/api/campaigns/{cid}/stop")
+    for lead in leads:  # leads picked before the stop are not called
+        client.worker.dial(campaign, lead, utcnow())
+    assert bolna.calls == []
+    client.worker.process_campaign(campaign, utcnow())
+    assert client.get(f"/api/campaigns/{cid}").json()["campaign"]["status"] == "stopped"
+    assert store.get_campaign(cid)["finished_at"]
+
+
+def test_call_placed_but_not_saved_is_recovered_by_webhook(client, bolna, payments):
+    signup(client)
+    top_up(client, payments)
+    cid = ready_campaign(client, b"name,phone\nA,9876543210\n")
+    client.post(f"/api/campaigns/{cid}/start")
+    store = client.app.state.store
+    lead = store.get_leads(cid)[0]
+    # The server stopped right after Bolna accepted the call: lead is "dialing" with no execution id.
+    store.claim_dial(lead["id"])
+    store.update_lead(lead["id"], called_at=utcnow().isoformat())
+    bolna.executions["exec-x"] = {"id": "exec-x", "status": "completed", "agent_id": "agent-1",
+                                  "user_number": "+919876543210", "transcript": "user: yes, interested",
+                                  "conversation_duration": 60}
+    assert client.post("/api/webhooks/bolna", json={"id": "exec-x"}).status_code == 200
+    data = client.get(f"/api/campaigns/{cid}").json()
+    assert data["leads"][0]["status"] == "completed" and data["leads"][0]["cost_paise"] == 1000
+    assert data["balance_paise"] == 50000 - 1000
+    # A call from some other agent or number is ignored.
+    bolna.executions["exec-y"] = {"id": "exec-y", "status": "completed", "agent_id": "other",
+                                  "user_number": "+919876543210"}
+    assert client.post("/api/webhooks/bolna", json={"id": "exec-y"}).status_code == 200
+    assert client.get("/api/me").json()["balance_paise"] == 49000
+
+
+def test_sign_in_edge_cases(client):
+    accounts = client.accounts
+    a = accounts.user_for_identity("auth-a", "a@example.com", "A")
+    b = accounts.user_for_identity("auth-b", "b@example.com", "B")
+    # B changes their Supabase email to one A already uses: sign-in still works, B keeps their address.
+    assert accounts.user_for_identity("auth-b", "a@example.com", "B")["email"] == "b@example.com"
+    # B changes to a free address: followed.
+    assert accounts.user_for_identity("auth-b", "new@example.com", "B")["email"] == "new@example.com"
+    # Same person signing in again (e.g. a second tab) gets the same account.
+    assert accounts.user_for_identity("auth-a", "a@example.com", "A")["id"] == a["id"]
+    assert b["id"] != a["id"]

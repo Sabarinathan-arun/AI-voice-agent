@@ -7,6 +7,7 @@ Only the campaign's cost totals are kept, in the usage table (accounts.py).
 """
 
 import json
+import re
 from datetime import datetime, timedelta
 
 from .db import Database, iso, utcnow  # noqa: F401  (iso/utcnow re-exported for callers)
@@ -82,6 +83,19 @@ class Store:
                 db.execute(f"UPDATE campaigns SET {', '.join(f'{k} = ?' for k in cols)} WHERE id = ?",
                            (*cols.values(), campaign_id))
 
+    def transition_campaign(self, campaign_id: str, from_status: str, to_status: str) -> bool:
+        """Change the status only if it is still from_status; False if another request got there first."""
+        with self.db.tx() as db:
+            return db.execute("UPDATE campaigns SET status = ? WHERE id = ? AND status = ?",
+                              (to_status, campaign_id, from_status)).rowcount == 1
+
+    def finish_campaign(self, campaign_id: str, finished_at: str) -> bool:
+        """Mark a campaign finished once: running becomes completed, stopped stays stopped."""
+        with self.db.tx() as db:
+            return db.execute("UPDATE campaigns SET finished_at = ?, status = CASE WHEN status = 'running' "
+                              "THEN 'completed' ELSE status END WHERE id = ? AND finished_at IS NULL",
+                              (finished_at, campaign_id)).rowcount == 1
+
     def campaigns_for_user(self, user_id: str) -> list[dict]:
         with self.db.tx() as db:
             rows = db.execute("SELECT * FROM campaigns WHERE user_id = ? ORDER BY created_at DESC",
@@ -106,7 +120,7 @@ class Store:
         cutoff = iso(now - retention)
         with self.db.tx() as db:
             return db.execute("DELETE FROM campaigns WHERE (finished_at IS NOT NULL AND finished_at < ?) "
-                              "OR (status = 'setup' AND created_at < ?)", (cutoff, cutoff)).rowcount
+                              "OR (status IN ('setup', 'starting') AND created_at < ?)", (cutoff, cutoff)).rowcount
 
     # --- leads ---------------------------------------------------------------
 
@@ -154,6 +168,28 @@ class Store:
             if cols:
                 db.execute(f"UPDATE leads SET {', '.join(f'{k} = ?' for k in cols)} WHERE id = ?",
                            (*cols.values(), lead_id))
+
+    def claim_dial(self, lead_id: int) -> bool:
+        """Move a lead from pending to dialing; False if it was skipped (campaign stopped) or already taken."""
+        with self.db.tx() as db:
+            return db.execute("UPDATE leads SET status = 'dialing' WHERE id = ? AND status = 'pending'",
+                              (lead_id,)).rowcount == 1
+
+    def find_lost_lead(self, agent_id: str, phone: str) -> dict | None:
+        """A lead whose call Bolna placed but whose execution id was never saved (the server stopped mid-dial)."""
+        digits = re.sub(r"\D", "", phone or "")
+        if not (agent_id and digits):
+            return None
+        with self.db.tx() as db:
+            rows = db.execute("SELECT l.*, c.data AS campaign_data FROM leads l JOIN campaigns c ON c.id = l.campaign_id "
+                              "WHERE l.execution_id IS NULL AND l.status IN ('dialing', 'timed_out')").fetchall()
+        for row in rows:
+            if json.loads(row.pop("campaign_data")).get("bolna_agent_id") != agent_id:
+                continue
+            lead = _lead(row)
+            if re.sub(r"\D", "", lead.get("phone") or "") == digits:
+                return lead
+        return None
 
     def claim_billing(self, lead_id: int) -> bool:
         """Mark a lead's call as billed; True only the first time (webhook and polling may both see it)."""

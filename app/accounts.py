@@ -37,16 +37,21 @@ class Accounts:
                 if row:
                     db.execute("UPDATE users SET auth_id = ? WHERE id = ?", (auth_id, row["id"]))
             if row:
-                db.execute("UPDATE users SET email = ?, name = ? WHERE id = ?", (email, name, row["id"]))
                 user_id = row["id"]
+                db.execute("UPDATE users SET name = ? WHERE id = ?", (name, user_id))
+                # Follow an email change made in Supabase, unless another account already uses that address.
+                db.execute("UPDATE users SET email = ? WHERE id = ? AND NOT EXISTS "
+                           "(SELECT 1 FROM users other WHERE other.email = ? AND other.id <> ?)",
+                           (email, user_id, email, user_id))
             else:
-                user_id = uuid.uuid4().hex
-                if self.db.legacy_password_column:  # older local databases require this column
-                    db.execute("INSERT INTO users (id, email, name, auth_id, created_at, password_hash) "
-                               "VALUES (?, ?, ?, ?, ?, '')", (user_id, email, name, auth_id, iso(utcnow())))
-                else:
-                    db.execute("INSERT INTO users (id, email, name, auth_id, created_at) VALUES (?, ?, ?, ?, ?)",
-                               (user_id, email, name, auth_id, iso(utcnow())))
+                # DO NOTHING: a second tab signing in at the same moment may have just created it.
+                legacy = self.db.legacy_password_column  # older local databases require password_hash
+                db.execute("INSERT INTO users (id, email, name, auth_id, created_at" + (", password_hash" if legacy
+                           else "") + ") VALUES (?, ?, ?, ?, ?" + (", ''" if legacy else "") + ") ON CONFLICT DO NOTHING",
+                           (uuid.uuid4().hex, email, name, auth_id, iso(utcnow())))
+                row = (db.execute("SELECT id FROM users WHERE auth_id = ?", (auth_id,)).fetchone()
+                       or db.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone())
+                user_id = row["id"]
         return self.get_user(user_id)
 
     def get_user(self, user_id: str) -> dict | None:

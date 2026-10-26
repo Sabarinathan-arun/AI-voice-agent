@@ -15,6 +15,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator
 
 from .accounts import Accounts
@@ -280,13 +281,17 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, auth
         content = await file.read(MAX_UPLOAD_BYTES + 1)
         if len(content) > MAX_UPLOAD_BYTES:
             raise HTTPException(413, "File too large (max 5 MB).")
-        try:
+        def save():  # parsing and saving run in a worker thread so other requests aren't held up
             result = parse_leads(file.filename or "", content, settings.default_country_code,
                                  settings.max_leads_per_campaign)
+            store.replace_leads(campaign_id, result.leads)
+            store.update_campaign(campaign_id, detail_fields=result.detail_fields, lead_file=file.filename)
+            return result
+
+        try:
+            result = await run_in_threadpool(save)
         except LeadFileError as exc:
             raise HTTPException(422, str(exc))
-        store.replace_leads(campaign_id, result.leads)
-        store.update_campaign(campaign_id, detail_fields=result.detail_fields, lead_file=file.filename)
         return {"imported": len(result.leads), "rejected": result.errors[:100],
                 "rejected_count": len(result.errors),
                 "detail_columns": [f["label"] for f in result.detail_fields]}
@@ -306,9 +311,12 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, auth
         if not settings.app_base_url.startswith("https://"):
             webhook_url = None  # Bolna cannot reach a local URL; results are polled instead
         voice = voices_by_id.get(campaign.get("voice") or "", default_voice)
+        if not store.transition_campaign(campaign_id, "setup", "starting"):  # double click / second tab
+            raise HTTPException(409, "This campaign is already starting.")
         try:
             agent_id = bolna.create_agent(campaign, webhook_url, voice)
         except (BolnaError, OSError, ValueError) as exc:
+            store.transition_campaign(campaign_id, "starting", "setup")
             log.exception("agent creation failed")
             raise HTTPException(502, f"Could not create the voice agent: {exc}")
         store.update_campaign(campaign_id, bolna_agent_id=agent_id, voice=voice["id"], status="running",
@@ -331,7 +339,7 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, auth
         except ValueError:
             raise HTTPException(400, "Invalid JSON")
         if isinstance(payload, dict):
-            worker.handle_webhook(payload)
+            await run_in_threadpool(worker.handle_webhook, payload)  # calls Bolna; keep the server responsive
             worker.wake()
         return {"received": True}
 
