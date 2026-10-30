@@ -152,9 +152,10 @@ def test_each_language_gets_a_voice_and_transcriber_that_speak_it(settings):
             assert synth["provider"] == "sarvam" and synth["provider_config"] == {
                 "voice": speaker.title(), "voice_id": speaker, "model": "bulbul:v3", "speed": 1,
                 "language": code}
-            # Sarvam in every language (it knows Indian accents), not ending the turn at the first short pause.
-            assert transcriber["provider"] == "sarvam" and transcriber["language"] == code
-            assert transcriber["high_vad_sensitivity"] is False
+            # Deepgram for English, Sarvam for Indian languages, each with its default speech detection.
+            expected = ("deepgram", "en") if language == "English" else ("sarvam", code)
+            assert (transcriber["provider"], transcriber["language"]) == expected
+            assert "high_vad_sensitivity" not in transcriber
             assert f"Start the call in {language}" in prompt and "switch_language" in prompt
             assert "never in English letters" in prompt and "Tamil script" in prompt
             # Every language is ready, so the call can follow the customer; it starts in the campaign's language.
@@ -162,7 +163,8 @@ def test_each_language_gets_a_voice_and_transcriber_that_speak_it(settings):
             assert set(transcriber["multilingual"]) == set(synth["multilingual"]) == set(LANGUAGES.values())
             for name, leg_code in LANGUAGES.items():
                 leg = transcriber["multilingual"][leg_code]
-                assert (leg["provider"], leg["language"]) == ("sarvam", leg_code)
+                assert (leg["provider"], leg["language"]) == (("deepgram", "en") if name == "English"
+                                                              else ("sarvam", leg_code))
                 assert "multilingual" not in leg and leg["sampling_rate"] == transcriber["sampling_rate"]
                 voice_leg = synth["multilingual"][leg_code]
                 assert voice_leg["provider"] == "sarvam" and voice_leg["provider_config"]["voice_id"] == speaker

@@ -82,7 +82,8 @@ and sales script, different voice. Both are Sarvam `bulbul:v3` voices, which spe
 | **Arjun** (male) | Sarvam Shubh (`shubh`) |
 | **Kavya** (female) | Sarvam Ritu (`ritu`), the voice behind Sarvam's sales and customer-service styles |
 
-- Speech recognition: Sarvam `saaras:v3` in every language (it knows Indian accents, English included).
+- Speech recognition: Deepgram for English (template), Sarvam `saaras:v3` for Indian languages, each with
+  its default speech detection.
 - **Colloquial speech:** the sales script opens with "sound like a local person chatting, never like a newsreader"
   and gives, for every language, bookish sentences next to how people really say them, in that language's script
   (`COLLOQUIAL_EXAMPLES` in `app/bolna.py`). Calls use OpenAI `gpt-4.1` (temperature 0.7), which writes far more
@@ -91,8 +92,8 @@ and sales script, different voice. Both are Sarvam `bulbul:v3` voices, which spe
   (`DEFAULT_GREETINGS`); the setup page shows it and warns when a typed line is in English letters for a
   non-English call. "Can you hear me?" check-ins are per language too.
 - **Call handling** (`app/bolna_agent_template.json`): voicemail detection off (it hung up on real people),
-  no background "hmm"s, a customer's turn ends after a 0.5 s pause (Sarvam's high-sensitivity cut-off off),
-  two words needed to interrupt the agent, hang up after 20 s of silence, calls up to 10 minutes.
+  no background "hmm"s, a customer's turn ends after a 0.5 s pause (English),
+  hang up after 20 s of silence, calls up to 10 minutes.
 - **Language switching:** each agent carries a transcriber and the same voice for every call language
   (Bolna `multilingual` pools, labelled `en`, `hi`, `ta`, …) and starts in the campaign's language. When the
   customer answers in, or asks for, another language, the AI switches (Bolna's `switch_language` tool) and carries

@@ -52,8 +52,7 @@
           "call_terminate": 600,
           "voicemail": false,
           "ambient_noise": false,
-          "backchanneling": false,
-          "number_of_words_for_interruption": 2
+          "backchanneling": false
         }
       }
     ]

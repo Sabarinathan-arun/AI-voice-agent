@@ -39,9 +39,9 @@ SCRIPTS = {
     "Kannada": "Kannada script (ಕನ್ನಡ)", "Malayalam": "Malayalam script (മലയാളം)",
     "Marathi": "Devanagari (मराठी)", "Bengali": "Bengali script (বাংলা)", "Gujarati": "Gujarati script (ગુજરાતી)",
 }
-# Speech recognition: Sarvam saaras:v3 understands every call language, Indian-accented English included.
-# high_vad_sensitivity off: don't end the customer's turn at the first short pause.
-INDIAN_TRANSCRIBER = {"provider": "sarvam", "model": "saaras:v3", "high_vad_sensitivity": False}
+# Speech recognition for Indian languages: Sarvam saaras:v3 (with Bolna's default speech detection, which is
+# tuned for phone audio). English keeps the template's transcriber (Deepgram).
+INDIAN_TRANSCRIBER = {"provider": "sarvam", "model": "saaras:v3"}
 
 # Opening line when the customer leaves it empty, in each language's everyday spoken form.
 # {agent} is the AI agent's name; Hindi needs the speaker's gender for the verb.
@@ -275,12 +275,14 @@ def build_welcome_message(campaign: dict, voice: dict | None = None) -> str:
 
 
 def transcriber_for(base: dict, language: str, region: bool = False) -> dict:
-    """Speech recognition for one language (Sarvam, which knows Indian accents), keeping the template's audio
-    settings."""
+    """Speech recognition for one language: the template's (Deepgram) for English, Sarvam for Indian languages."""
     config = dict(base)
     config.pop("multilingual", None)
     config.pop("active", None)
-    config.update(INDIAN_TRANSCRIBER, language=language_code(language, region))
+    if language == "English":
+        config["language"] = language_code(language)
+    else:
+        config.update(INDIAN_TRANSCRIBER, language=language_code(language, region))
     return config
 
 
