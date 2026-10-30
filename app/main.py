@@ -9,6 +9,7 @@ the per-minute rate; unanswered calls are free.
 import logging
 import re
 import secrets
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -89,6 +90,17 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, auth
         database.close()
 
     app = FastAPI(title="Intuvora AI Sales Agent", lifespan=lifespan)
+
+    @app.middleware("http")
+    async def log_timing(request: Request, call_next):
+        """Log how long each API request takes (Render -> Logs), to spot slow pages."""
+        started = time.perf_counter()
+        response = await call_next(request)
+        if request.url.path.startswith("/api/"):
+            ms = (time.perf_counter() - started) * 1000
+            (log.warning if ms > 2000 else log.info)("%s %s %d %.0f ms", request.method, request.url.path,
+                                                     response.status_code, ms)
+        return response
     app.state.settings, app.state.store, app.state.worker, app.state.accounts = settings, store, worker, accounts
 
     # --- helpers ---------------------------------------------------------------

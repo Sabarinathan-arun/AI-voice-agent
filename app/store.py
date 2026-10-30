@@ -76,7 +76,7 @@ class Store:
 
     def update_campaign(self, campaign_id: str, **fields) -> None:
         cols, rest = _split(fields, CAMPAIGN_COLUMNS)
-        with self.db.tx() as db:
+        with self.db.tx(atomic=bool(rest)) as db:  # read-modify-write of the JSON data
             if rest:
                 row = db.execute("SELECT data FROM campaigns WHERE id = ?" + self._lock_clause,
                                  (campaign_id,)).fetchone()
@@ -140,7 +140,7 @@ class Store:
                  json.dumps({**NEW_LEAD, "name": lead["name"], "phone": lead["phone"],
                              "details": dict(lead.get("details") or {})}))
                 for lead in leads]
-        with self.db.tx() as db:
+        with self.db.tx(atomic=True) as db:
             db.execute("DELETE FROM leads WHERE campaign_id = ?", (campaign_id,))
             db.executemany("INSERT INTO leads (campaign_id, row_number, status, data) VALUES (?, ?, ?, ?)", rows)
 
@@ -170,7 +170,7 @@ class Store:
         cols.pop("id", None)
         if "billed" in cols:
             cols["billed"] = int(bool(cols["billed"]))
-        with self.db.tx() as db:
+        with self.db.tx(atomic=bool(rest)) as db:  # read-modify-write of the JSON data
             if rest:
                 row = db.execute("SELECT data FROM leads WHERE id = ?" + self._lock_clause, (lead_id,)).fetchone()
                 if not row:

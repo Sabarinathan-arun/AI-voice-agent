@@ -30,7 +30,7 @@ class Accounts:
         account with the same email, or create a new one."""
         email = email.strip().lower()
         name = name.strip()[:100] or email.split("@")[0]
-        with self.db.tx() as db:
+        with self.db.tx(atomic=True) as db:
             row = db.execute("SELECT id FROM users WHERE auth_id = ?", (auth_id,)).fetchone()
             if not row:
                 row = db.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
@@ -114,7 +114,7 @@ class Accounts:
 
     def credit_topup(self, topup_id: str) -> bool:
         """Add a paid top-up to the wallet exactly once."""
-        with self.db.tx() as db:
+        with self.db.tx(atomic=True) as db:
             row = db.execute("UPDATE topups SET status = 'credited', credited_at = ? "
                              "WHERE id = ? AND status = 'pending' RETURNING user_id, amount_paise",
                              (iso(utcnow()), topup_id)).fetchone()
@@ -126,7 +126,7 @@ class Accounts:
     def charge_call(self, user_id: str, campaign_id: str, business_name: str | None, started_at: str,
                     seconds: int, amount_paise: int) -> None:
         """Deduct one answered call from the wallet and add it to the campaign's usage line."""
-        with self.db.tx() as db:
+        with self.db.tx(atomic=True) as db:
             self._move_money(db, user_id, -amount_paise, "call", campaign_id)
             db.execute(
                 "INSERT INTO usage (campaign_id, user_id, business_name, started_at, calls, seconds, amount_paise) "
