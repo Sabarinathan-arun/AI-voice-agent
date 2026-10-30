@@ -57,9 +57,10 @@ def _find_extracted(data, *names):
 
 
 def _plain(value):
-    """Reduce an extracted value such as {"subjective": "..."} or {"value": "..."} to text."""
+    """Reduce an extracted value such as {"objective": "interested", "subjective": "..."} or {"value": "..."} to
+    text. A Bolna extraction's objective answer (one of its options) wins over its free-text one."""
     if isinstance(value, dict):
-        for key in ("value", "subjective", "answer", "text"):
+        for key in ("value", "objective", "subjective", "answer", "text"):
             if value.get(key):
                 return str(value[key])
         texts = [str(v) for v in value.values() if isinstance(v, (str, int, float)) and str(v)]

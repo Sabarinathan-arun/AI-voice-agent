@@ -418,6 +418,8 @@ def test_language_switching_can_be_turned_off(settings):
     sent = []
 
     def handler(request):
+        if request.url.path != "/v2/agent":  # extraction setup after the agent is created
+            return httpx.Response(201, json={"id": "x"})
         transcriber = json.loads(request.content)["agent_config"]["tasks"][0]["tools_config"]["transcriber"]
         sent.append(transcriber["language"] == "unknown")  # Sarvam auto-detects the customer's language
         return httpx.Response(200, json={"agent_id": "a"})

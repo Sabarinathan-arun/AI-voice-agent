@@ -30,9 +30,8 @@ def test_agent_payload_from_customer_details(settings):
     payload = build_agent_payload(settings.bolna_agent_template, campaign, "https://x/hook", voice)
     cfg = payload["agent_config"]
     llm = cfg["tasks"][0]["tools_config"]["llm_agent"]["llm_config"]
-    assert "interested or not_interested" in llm["extraction_details"] and "callback_time" in llm["extraction_details"]
+    assert "extraction_details" not in llm  # results come from Bolna Extractions (see add_extractions)
     assert llm["summarization_details"] and llm["request_json"] is False
-    assert "extraction_details" not in cfg  # Bolna reads it from llm_config
     synth = cfg["tasks"][0]["tools_config"]["synthesizer"]
     assert synth["provider"] == "polly" and synth["provider_config"] == {"voice": "Kajal", "engine": "neural",
                                                                         "language": "hi"}
@@ -179,6 +178,8 @@ def test_agent_retried_with_region_language_codes_if_bolna_asks(settings):
     sent = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/v2/agent":  # extraction setup after the agent is created
+            return httpx.Response(201, json={"id": "x"})
         tools = json.loads(request.content)["agent_config"]["tasks"][0]["tools_config"]
         sent.append((tools["transcriber"]["language"], tools["synthesizer"]["provider_config"]["language"]))
         if tools["synthesizer"]["provider_config"]["language"] == "ta":
@@ -196,6 +197,8 @@ def test_agent_retried_with_region_language_codes_if_bolna_asks(settings):
     shapes = []
 
     def no_switching(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/v2/agent":  # extraction setup after the agent is created
+            return httpx.Response(201, json={"id": "x"})
         language = json.loads(request.content)["agent_config"]["tasks"][0]["tools_config"]["transcriber"]["language"]
         shapes.append(language)
         if language == "unknown":
@@ -221,6 +224,8 @@ def test_falls_back_to_a_smaller_ai_model_if_bolna_lacks_it(settings):
     models = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/v2/agent":  # extraction setup after the agent is created
+            return httpx.Response(201, json={"id": "x"})
         model = json.loads(request.content)["agent_config"]["tasks"][0]["tools_config"]["llm_agent"]["llm_config"]["model"]
         models.append(model)
         if model == "gpt-4.1":
@@ -232,7 +237,7 @@ def test_falls_back_to_a_smaller_ai_model_if_bolna_lacks_it(settings):
     campaign = {"id": "abcdefgh123", "business_name": "Acme", "product_details": "p", "sales_instructions": "s",
                 "language": "Tamil"}
     assert client.create_agent(campaign, None, load_voices(settings.voices_path)[0]) == "agent-11"
-    assert models == ["gpt-4.1"] * 8 + ["gpt-4o-mini"]
+    assert models == ["gpt-4.1"] * 4 + ["gpt-4o-mini"]
 
 
 def test_sales_script_shows_colloquial_examples_in_native_script(settings):
@@ -277,39 +282,54 @@ def test_opening_line_and_check_in_are_in_the_call_language(settings):
     assert single["agent_config"]["tasks"][0]["task_config"]["check_user_online_message"] == "ஹலோ, கேக்குதா?"
 
 
-def test_agent_has_a_follow_up_task_that_fills_the_result_columns(settings):
-    from app.bolna import EXTRACTION_FIELDS, load_voices
-    campaign = {"id": "abcdefgh123", "business_name": "Acme", "product_details": "p", "sales_instructions": "s",
-                "language": "Tamil"}
-    tasks = build_agent_payload(settings.bolna_agent_template, campaign, None,
-                                load_voices(settings.voices_path)[1])["agent_config"]["tasks"]
-    assert [t["task_type"] for t in tasks] == ["conversation", "extraction"]
-    agent = tasks[1]["tools_config"]["llm_agent"]
-    assert set(json.loads(agent["llm_config"]["extraction_json"])) == {"outcome", "callback_time", "key_points"}
-    assert "callback_time" in agent["extraction_details"] and agent["llm_config"]["extraction_details"]
-    assert tasks[1]["toolchain"]["pipelines"] == [["llm"]] and set(EXTRACTION_FIELDS) == {"outcome", "callback_time", "key_points"}
-    without = build_agent_payload(settings.bolna_agent_template, campaign, None, load_voices(settings.voices_path)[1],
-                                  extraction=False)["agent_config"]["tasks"]
-    assert [t["task_type"] for t in without] == ["conversation"]
-
-
-def test_agent_created_without_extraction_if_bolna_refuses_it(settings):
-    from app.bolna import BolnaClient, load_voices
-    seen = []
+def test_result_questions_attached_to_each_new_agent(settings):
+    from app.bolna import EXTRACTION_CATEGORY, BolnaClient, load_voices
+    calls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        tasks = json.loads(request.content)["agent_config"]["tasks"]
-        seen.append(len(tasks))
-        if len(tasks) > 1:
-            return httpx.Response(400, json={"message": "Invalid task_type extraction"})
-        return httpx.Response(200, json={"agent_id": "agent-12"})
+        body = json.loads(request.content) if request.content else None
+        calls.append((request.method, request.url.path, body))
+        if request.url.path == "/v2/agent":
+            return httpx.Response(201, json={"agent_id": "agent-7"})
+        if request.url.path == "/agent/agent-7/extraction-categories":
+            return httpx.Response(201, json={"id": "cat-1", "name": body["name"]})
+        return httpx.Response(201, json={"id": "disp"})
 
     client = BolnaClient(dataclasses.replace(settings, bolna_api_key="k"))
     client._http = httpx.Client(base_url="https://api.bolna.ai", transport=httpx.MockTransport(handler))
     campaign = {"id": "abcdefgh123", "business_name": "Acme", "product_details": "p", "sales_instructions": "s",
                 "language": "Tamil"}
-    assert client.create_agent(campaign, None, load_voices(settings.voices_path)[1]) == "agent-12"
-    assert seen[-1] == 1 and seen.count(2) == 4  # tried every language setup with it first
+    assert client.create_agent(campaign, None, load_voices(settings.voices_path)[1]) == "agent-7"
+    assert [path for _, path, _ in calls] == ["/v2/agent", "/agent/agent-7/extraction-categories"] + ["/dispositions/"] * 3
+    assert calls[1][2] == {"name": EXTRACTION_CATEGORY, "model": "gpt-4.1-mini"}
+    dispositions = {body["name"]: body for _, path, body in calls if path == "/dispositions/"}
+    assert set(dispositions) == {"outcome", "callback_time", "key_points"}
+    for body in dispositions.values():
+        assert body["agent_id"] == "agent-7" and body["category_id"] == "cat-1" and body["question"]
+        assert body["is_subjective"] or body["is_objective"]
+    assert dispositions["outcome"]["objective_options"] == ["interested", "not_interested", "wrong_number"]
+    # The retired agent-extraction settings are no longer sent.
+    agent = calls[0][2]["agent_config"]
+    assert [t["task_type"] for t in agent["tasks"]] == ["conversation"]
+    assert "extraction_details" not in agent["tasks"][0]["tools_config"]["llm_agent"]["llm_config"]
+
+
+def test_campaign_still_starts_if_bolna_refuses_the_result_questions(settings, caplog):
+    import logging
+    from app.bolna import BolnaClient, load_voices
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v2/agent":
+            return httpx.Response(201, json={"agent_id": "agent-8"})
+        return httpx.Response(403, json={"message": "Extractions are not enabled on your plan"})
+
+    client = BolnaClient(dataclasses.replace(settings, bolna_api_key="k"))
+    client._http = httpx.Client(base_url="https://api.bolna.ai", transport=httpx.MockTransport(handler))
+    campaign = {"id": "abcdefgh123", "business_name": "Acme", "product_details": "p", "sales_instructions": "s",
+                "language": "English"}
+    with caplog.at_level(logging.WARNING, logger="app.bolna"):
+        assert client.create_agent(campaign, None, load_voices(settings.voices_path)[0]) == "agent-8"
+    assert any("extractions not set up" in r.getMessage() and "not enabled" in r.getMessage() for r in caplog.records)
 
 
 def test_extraction_results_fill_the_columns():
@@ -319,3 +339,19 @@ def test_extraction_results_fill_the_columns():
                                                  "key_points": "Asked about EMI"}})
     assert (fields["outcome"], fields["callback_time"], fields["key_points"]) == (
         "interested", "Saturday 10 am", "Asked about EMI")
+
+
+def test_bolna_extractions_format_fills_the_columns():
+    from app.worker import parse_execution
+    fields = parse_execution({"status": "completed", "transcript": "assistant: hi\nuser: Saturday 10 vaanga",
+                              "extracted_data": {"Call results": {
+                                  "outcome": {"subjective": "She wants a visit", "objective": "interested",
+                                              "confidence": 0.9},
+                                  "callback_time": {"subjective": "Saturday 10 am", "objective": None},
+                                  "key_points": {"subjective": "Asked about EMI", "objective": None}}}})
+    assert (fields["outcome"], fields["callback_time"], fields["key_points"]) == (
+        "interested", "Saturday 10 am", "Asked about EMI")
+    none = parse_execution({"status": "completed", "transcript": "user: no thanks",
+                            "extracted_data": {"Call results": {"outcome": {"objective": "not_interested"},
+                                                                "callback_time": {"subjective": "none"}}}})
+    assert none["outcome"] == "not_interested" and none["callback_time"] is None
