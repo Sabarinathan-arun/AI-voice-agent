@@ -84,8 +84,12 @@ and sales script, different voice. Both are Sarvam `bulbul:v3` voices, which spe
 
 - Speech recognition: English calls use Deepgram (template); every other language uses Sarvam `saaras:v3`
   with the language set, so the agent understands the customer.
-- Languages are sent to Bolna as `ta`, `te`, …; if Bolna rejects a language code for a model, the agent is
-  created again once with region codes (`ta-IN`).
+- **Language switching:** each agent carries a transcriber and the same voice for every call language
+  (Bolna `multilingual` pools, labelled `en`, `hi`, `ta`, …) and starts in the campaign's language. When the
+  customer answers in, or asks for, another language, the AI switches (Bolna's `switch_language` tool) and carries
+  on in that language, colloquially. Only the languages a call uses are connected.
+- If Bolna refuses the agent (400), it is created again with region codes (`ta-IN`), then as a single-language
+  agent, so a campaign always starts; the refusals are logged.
 - The AI writes replies in the language's own script (e.g. Tamil script, not Tamil in English letters) so the
   voice pronounces them properly; everyday English words stay in English.
 - `name` is what customers see and how the agent introduces itself on calls.

@@ -42,7 +42,7 @@ def test_agent_payload_from_customer_details(settings):
     assert (transcriber["provider"], transcriber["model"], transcriber["language"]) == ("sarvam", "saaras:v3", "hi")
     prompt = payload["agent_prompts"]["task_1"]["system_prompt"]
     assert "Your name is Kajal" in prompt and "Sounding natural in Hindi" in prompt
-    for text in ("Acme", "Solar since 2015", "3kW system", "Book a visit", "Speak in Hindi",
+    for text in ("Acme", "Solar since 2015", "3kW system", "Book a visit", "Start the call in Hindi",
                  "{{customer_name}}", "{{customer_details}}", "How to sound human", "AI assistant calling for Acme"):
         assert text in prompt
     campaign["welcome_message"] = ""
@@ -154,11 +154,24 @@ def test_each_language_gets_a_voice_and_transcriber_that_speak_it(settings):
                 "language": code}
             if language == "English":
                 assert transcriber["provider"] == "deepgram" and transcriber["language"] == "en"
-                assert "English letters" not in prompt
             else:
                 assert transcriber["provider"] == "sarvam" and transcriber["language"] == code
-                assert "never in English letters" in prompt
-    assert "Tamil script" in tools("Tamil", "kavya")[2]
+            assert f"Start the call in {language}" in prompt and "switch_language" in prompt
+            assert "never in English letters" in prompt and "Tamil script" in prompt
+            # Every language is ready, so the call can follow the customer; it starts in the campaign's language.
+            assert transcriber["active"] == code and synth["active"] == code
+            assert set(transcriber["multilingual"]) == set(synth["multilingual"]) == set(LANGUAGES.values())
+            for name, leg_code in LANGUAGES.items():
+                leg = transcriber["multilingual"][leg_code]
+                assert (leg["provider"], leg["language"]) == (("deepgram", "en") if name == "English"
+                                                              else ("sarvam", leg_code))
+                assert "multilingual" not in leg and leg["sampling_rate"] == transcriber["sampling_rate"]
+                voice_leg = synth["multilingual"][leg_code]
+                assert voice_leg["provider"] == "sarvam" and voice_leg["provider_config"]["voice_id"] == speaker
+                assert voice_leg["provider_config"]["language"] == leg_code and voice_leg["stream"] is True
+    # The colloquial guide covers every language the call may switch to.
+    tamil_prompt = tools("Tamil", "kavya")[2]
+    assert "pechu Tamil" in tamil_prompt and "Hinglish" in tamil_prompt and "spoken Telugu" in tamil_prompt
 
 
 def test_agent_retried_with_region_language_codes_if_bolna_asks(settings):
@@ -179,11 +192,25 @@ def test_agent_retried_with_region_language_codes_if_bolna_asks(settings):
     assert client.create_agent(campaign, None, load_voices(settings.voices_path)[1]) == "agent-9"
     assert sent == [("ta", "ta"), ("ta-IN", "ta-IN")]
 
-    # Any other error is reported as is, without a second try.
+    # If Bolna refuses language switching altogether, a single-language agent is created.
+    shapes = []
+
+    def no_switching(request: httpx.Request) -> httpx.Response:
+        tools = json.loads(request.content)["agent_config"]["tasks"][0]["tools_config"]
+        shapes.append(("multilingual" in tools["transcriber"], tools["transcriber"]["language"]))
+        if "multilingual" in tools["transcriber"]:
+            return httpx.Response(400, json={"message": "multilingual is not supported"})
+        return httpx.Response(200, json={"agent_id": "agent-10"})
+
+    client._http = httpx.Client(base_url="https://api.bolna.ai", transport=httpx.MockTransport(no_switching))
+    assert client.create_agent(campaign, None, load_voices(settings.voices_path)[1]) == "agent-10"
+    assert shapes == [(True, "ta"), (True, "ta-IN"), (False, "ta")]
+
+    # Errors that aren't about the agent's settings are reported straight away.
     sent.clear()
     client._http = httpx.Client(base_url="https://api.bolna.ai", transport=httpx.MockTransport(
-        lambda r: (sent.append(1), httpx.Response(400, json={"message": "Invalid voice"}))[1]))
+        lambda r: (sent.append(1), httpx.Response(401, json={"message": "Invalid API key"}))[1]))
     import pytest
-    with pytest.raises(BolnaError, match="Invalid voice"):
+    with pytest.raises(BolnaError, match="Invalid API key"):
         client.create_agent(campaign, None, load_voices(settings.voices_path)[1])
     assert sent == [1]

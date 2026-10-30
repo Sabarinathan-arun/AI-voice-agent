@@ -13,11 +13,14 @@ Bolna endpoints used:
 
 import copy
 import json
+import logging
 import re
 
 import httpx
 
 from .config import Settings
+
+log = logging.getLogger(__name__)
 
 # Execution statuses after which Bolna will not update the call any more.
 TERMINAL_STATUSES = {
@@ -97,14 +100,43 @@ def voice_for_language(voice: dict, language: str, region: bool = False) -> tupl
     return voice["provider"], config
 
 
-def build_system_prompt(campaign: dict, agent_name: str = "") -> str:
+def _language_rules(language: str, switch_languages: bool) -> str:
+    """How to choose the language and script of each reply."""
+    lines = []
+    if switch_languages:
+        others = ", ".join(name for name in LANGUAGES if name != language)
+        lines.append(
+            "- The customer decides the language. If they answer in another language, or ask for one, switch to it at "
+            f"once (use the switch_language tool) and carry on in their language: {others} or {language}. Do not "
+            "ask permission to switch and do not comment on it. If they mix languages (Hinglish, Tanglish), mix the "
+            "same way.")
+    else:
+        lines.append("- If the customer mixes languages (Hinglish, Tanglish), follow how they talk.")
+    scripts = "; ".join(f"{name}: {script}" for name, script in SCRIPTS.items())
+    lines.append(
+        "- Write each reply in the script of the language you are speaking, never in English letters, so the voice "
+        f"pronounces it correctly ({scripts}; English in English letters). Keep common English words people use "
+        "(offer, price, booking, EMI) in English letters. The example words below are shown in English letters "
+        "only for reference; say them in the language's own script.")
+    return "\n".join(lines)
+
+
+def _spoken_styles(language: str, switch_languages: bool) -> str:
+    """Everyday-speech guidance for the call language, and for every language the call may switch to."""
+    lines = [f"- {SPOKEN_STYLE.get(language, SPOKEN_STYLE['English'])}"]
+    if switch_languages:
+        lines.append("- After switching, speak the new language in the same everyday way:")
+        lines += [f"  - {name}: {style}" for name, style in SPOKEN_STYLE.items() if name != language]
+    return "\n".join(lines)
+
+
+def build_system_prompt(campaign: dict, agent_name: str = "", switch_languages: bool = False) -> str:
     """The agent's sales script. {{customer_name}} and {{customer_details}} are filled by Bolna on each call."""
     language = campaign.get("language") or "English"
     business = campaign["business_name"]
     return f"""You are a real-sounding sales caller for {business}, on a phone call with {{{{customer_name}}}}.
-Speak in {language}. If the customer clearly prefers another language, or mixes languages (for example
-Hinglish or Tanglish), follow how they talk.
-{f"Write every reply in {SCRIPTS[language]}, never in English letters, so it is pronounced correctly; keep common English words (offer, price, booking) in English letters." if language in SCRIPTS else ""}
+Start the call in {language}.
+{_language_rules(language, switch_languages)}
 
 ## How to sound human on the phone
 - Talk the way people actually talk on a call: short, simple sentences, one idea at a time. Usually one or two
@@ -124,7 +156,7 @@ Hinglish or Tanglish), follow how they talk.
 - Speak {language} the way a friendly local person speaks it on the phone: the everyday spoken form, never the
   formal, bookish or news-reader style. Do not sound grammatically perfect; real people use short forms, drop
   words that are obvious, and keep sentences loose and simple.
-- {SPOKEN_STYLE.get(language, SPOKEN_STYLE["English"])}
+{_spoken_styles(language, switch_languages)}
 - It is normal to keep common English words people use in conversation (offer, price, discount, booking, EMI)
   instead of translating them into formal words nobody says.
 - Greet the way people naturally do in {language}, and use small natural fillers and acknowledgements of that
@@ -161,9 +193,23 @@ def build_welcome_message(campaign: dict) -> str:
     return text.replace("{{business_name}}", campaign["business_name"])
 
 
+def transcriber_for(base: dict, language: str, region: bool = False) -> dict:
+    """Speech recognition for one language: the template's (Deepgram) for English, Sarvam for Indian languages."""
+    config = dict(base)
+    config.pop("multilingual", None)
+    config.pop("active", None)
+    if language == "English":
+        config["language"] = language_code(language)
+    else:
+        config.update(INDIAN_TRANSCRIBER, language=language_code(language, region))
+    return config
+
+
 def build_agent_payload(template_path: str, campaign: dict, webhook_url: str | None, voice: dict | None = None,
-                        region_codes: bool = False) -> dict:
-    """The Bolna agent for a campaign. region_codes: send languages as "ta-IN" instead of "ta"."""
+                        region_codes: bool = False, multilingual: bool = True) -> dict:
+    """The Bolna agent for a campaign. It starts in the campaign's language; with multilingual=True it carries a
+    transcriber and voice for every call language, so Bolna switches when the customer speaks another one (only
+    the languages a call actually uses are connected). region_codes: languages as "ta-IN" instead of "ta"."""
     with open(template_path) as f:
         payload = copy.deepcopy(json.load(f))
     cfg = payload.setdefault("agent_config", {})
@@ -172,7 +218,6 @@ def build_agent_payload(template_path: str, campaign: dict, webhook_url: str | N
     cfg["webhook_url"] = webhook_url
     cfg.setdefault("call_summary_enabled", True)  # Bolna returns a summary only when this is on
     language = campaign.get("language") or "English"
-    code = language_code(language, region_codes)
     for task in cfg.get("tasks", []):
         tools = task.get("tools_config", {})
         llm_config = tools.get("llm_agent", {}).get("llm_config")
@@ -180,15 +225,26 @@ def build_agent_payload(template_path: str, campaign: dict, webhook_url: str | N
             llm_config.setdefault("summarization_details", "Summarise the sales call in 2-3 short sentences, in English.")
             llm_config.setdefault("extraction_details", EXTRACTION_PROMPT)
         if tools.get("transcriber") is not None:
-            if language == "English":
-                tools["transcriber"]["language"] = language_code(language)
-            else:
-                tools["transcriber"].update(INDIAN_TRANSCRIBER, language=code)
+            base = tools["transcriber"]
+            tools["transcriber"] = transcriber_for(base, language, region_codes)
+            if multilingual:  # labels are Bolna's language codes: "en", "hi", "ta", ...
+                tools["transcriber"]["multilingual"] = {LANGUAGES[name]: transcriber_for(base, name, region_codes)
+                                                        for name in LANGUAGES}
+                tools["transcriber"]["active"] = LANGUAGES.get(language, "en")
         if voice and tools.get("synthesizer") is not None:
-            tools["synthesizer"]["provider"], tools["synthesizer"]["provider_config"] = voice_for_language(
-                voice, language, region_codes)
+            synth = tools["synthesizer"]
+            synth.pop("multilingual", None)
+            synth["provider"], synth["provider_config"] = voice_for_language(voice, language, region_codes)
+            if multilingual:  # the same voice in every language, so switching keeps the agent sounding the same
+                legs = {}
+                for name, code in LANGUAGES.items():
+                    provider, provider_config = voice_for_language(voice, name, region_codes)
+                    legs[code] = {**{k: v for k, v in synth.items() if k not in ("provider", "provider_config", "active")},
+                                  "provider": provider, "provider_config": provider_config}
+                synth["multilingual"] = legs
+                synth["active"] = LANGUAGES.get(language, "en")
     payload.setdefault("agent_prompts", {}).setdefault("task_1", {})["system_prompt"] = build_system_prompt(
-        campaign, (voice or {}).get("name", ""))
+        campaign, (voice or {}).get("name", ""), switch_languages=multilingual)
     return payload
 
 
@@ -226,16 +282,19 @@ class BolnaClient:
         return resp.json() if resp.content else {}
 
     def create_agent(self, campaign: dict, webhook_url: str | None, voice: dict | None = None) -> str:
-        payload = build_agent_payload(self.settings.bolna_agent_template, campaign, webhook_url, voice)
-        try:
-            data = self._request("POST", "/v2/agent", json=payload)
-        except BolnaError as exc:
-            # Bolna takes "ta"; should it want the region form ("ta-IN") for a model, try that once.
-            if " 400: " not in str(exc) or "language" not in str(exc).lower():
-                raise
+        # Most capable first: language switching with "ta" codes; if Bolna refuses (400), "ta-IN" codes, then a
+        # single-language agent. Other errors (auth, network, 5xx) are reported straight away.
+        attempts = [(True, False), (True, True), (False, False), (False, True)]
+        for number, (multilingual, region) in enumerate(attempts, 1):
             payload = build_agent_payload(self.settings.bolna_agent_template, campaign, webhook_url, voice,
-                                          region_codes=True)
-            data = self._request("POST", "/v2/agent", json=payload)
+                                          region_codes=region, multilingual=multilingual)
+            try:
+                data = self._request("POST", "/v2/agent", json=payload)
+                break
+            except BolnaError as exc:
+                if " 400: " not in str(exc) or number == len(attempts):
+                    raise
+                log.warning("Bolna refused agent (multilingual=%s, region_codes=%s): %s", multilingual, region, exc)
         agent_id = data.get("agent_id") or data.get("id")
         if not agent_id:
             raise BolnaError(f"Bolna did not return an agent_id: {data}")
