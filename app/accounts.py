@@ -70,10 +70,10 @@ class Accounts:
     def user_for_session(self, token: str | None) -> dict | None:
         if not token:
             return None
-        with self.db.tx() as db:
-            row = db.execute("SELECT user_id FROM sessions WHERE token_hash = ? AND expires_at > ?",
-                             (_token_hash(token), iso(utcnow()))).fetchone()
-        return self.get_user(row["user_id"]) if row else None
+        with self.db.tx() as db:  # one query: this runs on every request
+            return db.execute("SELECT u.id, u.email, u.name, u.balance_paise, u.created_at FROM sessions s "
+                              "JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.expires_at > ?",
+                              (_token_hash(token), iso(utcnow()))).fetchone()
 
     def delete_session(self, token: str | None) -> None:
         if token:
@@ -97,8 +97,8 @@ class Accounts:
         with self.db.tx() as db:
             db.execute("UPDATE topups SET payment_ref = ? WHERE id = ?", (payment_ref, topup_id))
 
-    def pending_topups(self, user_id: str, max_age: timedelta = timedelta(days=7)) -> list[dict]:
-        """Unpaid top-ups worth re-checking with Razorpay (abandoned checkouts are ignored after a week)."""
+    def pending_topups(self, user_id: str, max_age: timedelta = timedelta(days=1)) -> list[dict]:
+        """Unpaid top-ups worth re-checking with Razorpay (abandoned checkouts are ignored after a day)."""
         with self.db.tx() as db:
             return db.execute("SELECT * FROM topups WHERE user_id = ? AND status = 'pending' "
                               "AND payment_ref IS NOT NULL AND created_at > ?",

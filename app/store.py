@@ -15,6 +15,10 @@ from .db import Database, iso, utcnow  # noqa: F401  (iso/utcnow re-exported for
 CAMPAIGN_COLUMNS = ("id", "user_id", "status", "created_at", "finished_at")
 LEAD_COLUMNS = ("id", "campaign_id", "row_number", "status", "execution_id", "billed")
 
+# Call statuses while a call is being placed or is live; a lead is finished once it is out of these and "pending".
+IN_FLIGHT = ("dialing", "queued", "initiated", "ringing", "in-progress", "call-disconnected")
+UNFINISHED_LEAD_STATUSES = ("pending", *IN_FLIGHT)
+
 NEW_CAMPAIGN = {
     "business_name": None, "business_description": None, "product_details": None, "sales_instructions": None,
     "welcome_message": None, "language": None, "voice": None,
@@ -96,11 +100,18 @@ class Store:
                               "THEN 'completed' ELSE status END WHERE id = ? AND finished_at IS NULL",
                               (finished_at, campaign_id)).rowcount == 1
 
-    def campaigns_for_user(self, user_id: str) -> list[dict]:
+    def campaign_summaries(self, user_id: str) -> list[dict]:
+        """The user's campaigns, newest first, with lead counts, in one round trip (for the dashboard list)."""
+        busy = ",".join("?" for _ in UNFINISHED_LEAD_STATUSES)
         with self.db.tx() as db:
-            rows = db.execute("SELECT * FROM campaigns WHERE user_id = ? ORDER BY created_at DESC",
-                              (user_id,)).fetchall()
-        return [_campaign(r) for r in rows]
+            rows = db.execute(
+                "SELECT c.*, COUNT(l.id) AS lead_count, "
+                f"COALESCE(SUM(CASE WHEN l.id IS NOT NULL AND l.status NOT IN ({busy}) THEN 1 ELSE 0 END), 0) AS done_count "
+                "FROM campaigns c LEFT JOIN leads l ON l.campaign_id = c.id WHERE c.user_id = ? "
+                "GROUP BY c.id, c.user_id, c.status, c.created_at, c.finished_at, c.data ORDER BY c.created_at DESC",
+                (*UNFINISHED_LEAD_STATUSES, user_id)).fetchall()
+        return [{**_campaign(r), "lead_count": int(r["lead_count"]), "done_count": int(r["done_count"])}
+                for r in rows]
 
     def campaigns_with_status(self, *statuses: str) -> list[dict]:
         marks = ",".join("?" for _ in statuses)

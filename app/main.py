@@ -116,15 +116,9 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, auth
 
     def me(user: dict) -> dict:
         return {"id": user["id"], "name": user["name"], "email": user["email"],
-                "balance_paise": accounts.balance(user["id"])}
+                "balance_paise": user["balance_paise"]}
 
-    def campaign_summary(campaign: dict) -> dict:
-        leads = store.get_leads(campaign["id"])
-        return {"id": campaign["id"], "business_name": campaign["business_name"], "status": campaign["status"],
-                "created_at": campaign["created_at"], "leads": len(leads),
-                "done": sum(1 for l in leads if l["outcome"] or l["status"] == "skipped")}
-
-    def serialize(campaign: dict) -> dict:
+    def serialize(campaign: dict, balance_paise: int | None = None) -> dict:
         leads = store.get_leads(campaign["id"])
         counts: dict[str, int] = {}
         for lead in leads:
@@ -139,7 +133,7 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, auth
             "stats": {"total": len(leads), "done": done, "by_outcome": counts, "booked": booked,
                       "answered_calls": usage["calls"],
                       "seconds": usage["seconds"], "cost_paise": usage["amount_paise"]},
-            "balance_paise": accounts.balance(campaign["user_id"]),
+            "balance_paise": accounts.balance(campaign["user_id"]) if balance_paise is None else balance_paise,
             "leads": [
                 {k: l[k] for k in ("id", "row_number", "name", "phone", "details", "status", "outcome", "summary",
                                    "duration_seconds", "transcript", "called_at", "cost_paise",
@@ -218,7 +212,7 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, auth
 
     @app.get("/api/wallet")
     def wallet(user: dict = Depends(current_user)):
-        return {"balance_paise": accounts.balance(user["id"]), "history": accounts.history(user["id"])}
+        return {"balance_paise": user["balance_paise"], "history": accounts.history(user["id"])}
 
     @app.post("/api/wallet/topups", status_code=201)
     def create_topup(body: TopupIn, user: dict = Depends(current_user)):
@@ -241,13 +235,16 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, auth
         for topup in accounts.pending_topups(user["id"]):
             if payments.is_paid(topup["payment_ref"], topup["id"]) and accounts.credit_topup(topup["id"]):
                 credited += topup["amount_paise"]
-        return {"credited_paise": credited, "balance_paise": accounts.balance(user["id"])}
+        balance = accounts.balance(user["id"]) if credited else user["balance_paise"]
+        return {"credited_paise": credited, "balance_paise": balance}
 
     # --- campaigns -----------------------------------------------------------------
 
     @app.get("/api/campaigns")
     def list_campaigns(user: dict = Depends(current_user)):
-        return [campaign_summary(c) for c in store.campaigns_for_user(user["id"])]
+        return [{"id": c["id"], "business_name": c["business_name"], "status": c["status"],
+                 "created_at": c["created_at"], "leads": c["lead_count"], "done": c["done_count"]}
+                for c in store.campaign_summaries(user["id"])]
 
     @app.post("/api/campaigns", status_code=201)
     def create_campaign(user: dict = Depends(current_user)):
@@ -261,7 +258,7 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, auth
 
     @app.get("/api/campaigns/{campaign_id}")
     def get_campaign(campaign_id: str, user: dict = Depends(current_user)):
-        return serialize(get_campaign_or_404(campaign_id, user))
+        return serialize(get_campaign_or_404(campaign_id, user), user["balance_paise"])  # polled while calling
 
     @app.put("/api/campaigns/{campaign_id}/setup")
     def save_setup(campaign_id: str, body: SetupIn, user: dict = Depends(current_user)):

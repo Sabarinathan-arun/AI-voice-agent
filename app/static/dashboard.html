@@ -93,7 +93,8 @@
 let selectedAmount = null;
 
 async function loadWallet() {
-  const w = await (await call('/api/wallet')).json();
+  const [w, cfg] = await Promise.all([call('/api/wallet').then(r => r.json()), getConfig().catch(() => ({}))]);
+  pricePerMinute = cfg.price_per_minute_paise || pricePerMinute; lowBalance = cfg.low_balance_paise || lowBalance;
   $('balance').textContent = rupees(w.balance_paise);
   $('minutes-left').textContent = Math.max(0, Math.floor(w.balance_paise / pricePerMinute));
   showBalance(w.balance_paise);
@@ -137,20 +138,26 @@ $('new-campaign').onclick = async () => {
 };
 
 (async () => {
-  const me = await initHeader();
-  $('greeting').textContent = `Hi, ${me.name}`;
-  $('rate').textContent = pricePerMinute / 100;
-  $('low-limit').textContent = rupees(lowBalance).replace(/\.00$/, '');
   const params = new URLSearchParams(location.search);
+  const campaigns = loadCampaigns();  // all requests start together
+  const header = initHeader().then(me => {
+    $('greeting').textContent = `Hi, ${me.name}`;
+    $('rate').textContent = pricePerMinute / 100;
+    $('low-limit').textContent = rupees(lowBalance).replace(/\.00$/, '');
+  });
   if (params.has('topup')) {  // back from Razorpay: credit the payment
     const r = await (await call('/api/wallet/topups/verify', {method: 'POST'})).json();
     if (r.credited_paise) msg('topmsg', `Payment received — ${rupees(r.credited_paise)} added to your wallet.`, true);
     else msg('topmsg', 'We have not received this payment yet. If you paid, it will appear here shortly.', false);
     history.replaceState(null, '', '/dashboard');
+    if (r.credited_paise) showBalance(r.balance_paise);
+    await loadWallet();
   } else {
-    call('/api/wallet/topups/verify', {method: 'POST'}).then(loadWallet).catch(() => {});
+    loadWallet();
+    call('/api/wallet/topups/verify', {method: 'POST'}).then(r => r.json())
+      .then(r => { if (r.credited_paise) { showBalance(r.balance_paise); loadWallet(); } }).catch(() => {});
   }
-  await Promise.all([loadWallet(), loadCampaigns()]);
+  await Promise.all([header, campaigns]);
 })();
 </script>
 </body>

@@ -310,14 +310,15 @@ $('stop').onclick = async () => {
 };
 
 (async () => {
+  initHeader();  // in parallel with the form options
+  const voicesRequest = fetch('/api/voices').then(r => r.json());
   try {
-    const cfg = await (await fetch('/api/config')).json();
+    const cfg = await getConfig();
     $('language').innerHTML = cfg.languages.map(l => `<option>${esc(l)}</option>`).join('');
     $('rate').textContent = rupees(cfg.price_per_minute_paise).replace(/\.00$/, '');
     $('lowlimit').textContent = rupees(cfg.low_balance_paise).replace(/\.00$/, '');
-    renderVoices(await (await fetch('/api/voices')).json());
+    renderVoices(await voicesRequest);
   } catch (e) {}
-  await initHeader();
   if (!id) { msg('topmsg', 'Missing campaign id.'); return; }
   $('pagelink').value = `${location.origin}/campaign?id=${encodeURIComponent(id)}`;
   load();

@@ -105,6 +105,9 @@ Calls nobody spoke on show **No answer**, as do unanswered and busy calls.
 Deploy with **https** and set `APP_BASE_URL`. Session cookies are then marked secure, and each campaign agent gets
 `https://<your-domain>/api/webhooks/bolna` as its webhook. Run **one** server process (it runs the calling worker).
 
+**Speed:** create the Render service in **Singapore** and the Supabase project in **Mumbai** (or both in the same
+region); every database query crosses that distance. A Render service in the US adds roughly 0.25 s per query.
+
 **Render free plan:** start command `uvicorn app.main:create_app --factory --host 0.0.0.0 --port $PORT`; put every
 `.env` value in the service's Environment settings (never commit `.env`). Free services sleep after 15 minutes
 without visits, which pauses calling until the next request; all data is in Supabase, so nothing is lost and

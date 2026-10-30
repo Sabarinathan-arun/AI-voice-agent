@@ -35,12 +35,18 @@ function showBalance(paise) {
   chip.textContent = rupees(paise);
   chip.classList.toggle('low', paise < lowBalance);
 }
+let configRequest = null;  // shared, so the page and the header fetch /api/config only once
+function getConfig() {
+  configRequest = configRequest || fetch('/api/config').then(r => r.json());
+  return configRequest;
+}
 async function initHeader() {
+  const meRequest = call('/api/me');  // in parallel with the config
   try {
-    const cfg = await (await fetch('/api/config')).json();
+    const cfg = await getConfig();
     pricePerMinute = cfg.price_per_minute_paise; lowBalance = cfg.low_balance_paise;
   } catch (e) {}
-  const me = await (await call('/api/me')).json();
+  const me = await (await meRequest).json();
   if ($('user-name')) $('user-name').textContent = me.name;
   showBalance(me.balance_paise);
   $('logout').onclick = async () => { await fetch('/api/auth/logout', {method: 'POST'}); location.href = '/'; };

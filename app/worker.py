@@ -8,14 +8,13 @@ import threading
 from datetime import datetime, timedelta
 
 from .bolna import TERMINAL_STATUSES, BolnaError, call_user_data
-from .store import Store, iso, utcnow
+from .store import IN_FLIGHT, Store, iso, utcnow
 
 log = logging.getLogger(__name__)
 
 IDLE_CHECK_SECONDS = 60
 PURGE_EVERY = timedelta(hours=1)
 
-IN_FLIGHT = ("dialing", "queued", "initiated", "ringing", "in-progress", "call-disconnected")
 NOT_REACHED = {"no-answer": "no_answer", "busy": "busy", "failed": "failed", "error": "failed",
                "canceled": "cancelled", "cancelled": "cancelled", "stopped": "cancelled",
                "balance-low": "failed"}

@@ -371,3 +371,22 @@ def test_sign_in_edge_cases(client):
     # Same person signing in again (e.g. a second tab) gets the same account.
     assert accounts.user_for_identity("auth-a", "a@example.com", "A")["id"] == a["id"]
     assert b["id"] != a["id"]
+
+
+def test_campaign_list_counts(client, bolna, payments):
+    signup(client)
+    top_up(client, payments)
+    draft = client.post("/api/campaigns").json()["campaign_id"]
+    cid = ready_campaign(client)
+    client.post(f"/api/campaigns/{cid}/start")
+    client.worker.tick()  # 2 calls ringing, 1 waiting
+
+    def counts():
+        return {c["id"]: (c["leads"], c["done"], c["business_name"]) for c in client.get("/api/campaigns").json()}
+
+    assert counts() == {cid: (3, 0, "Acme Solar"), draft: (0, 0, None)}  # draft made before any setup
+    client.post(f"/api/campaigns/{cid}/stop")
+    assert counts()[cid] == (3, 1, "Acme Solar")  # the waiting lead is skipped
+    bolna.executions["exec-0"] = {"id": "exec-0", "status": "busy"}
+    client.worker.tick()
+    assert counts()[cid] == (3, 2, "Acme Solar")  # one call finished, one still ringing
