@@ -429,3 +429,41 @@ def test_language_switching_can_be_turned_off(settings):
         client.create_agent({"id": "abcdefgh1", "business_name": "A", "product_details": "p",
                              "sales_instructions": "s", "language": "Tamil"}, None, load_voices(settings.voices_path)[1])
         assert sent == expected
+
+
+def test_extraction_that_arrives_after_the_call_fills_the_columns(client, bolna, payments, caplog):
+    import logging
+    signup(client)
+    top_up(client, payments)
+    cid = ready_campaign(client, b"name,phone\nAsha,9876543210\n")
+    client.post(f"/api/campaigns/{cid}/start")
+    client.worker.tick()
+    call = {"id": "exec-0", "status": "completed", "conversation_duration": 30,
+            "transcript": "assistant: Vanakkam\nuser: Saturday vaanga"}
+    bolna.executions["exec-0"] = dict(call)
+    client.worker.tick()  # call over, no extraction yet
+    assert client.get(f"/api/campaigns/{cid}").json()["campaign"]["status"] == "completed"
+    # Bolna's follow-up task finishes a little later; no webhook needed, the worker keeps checking.
+    bolna.executions["exec-0"] = {**call, "extracted_data": {"outcome": "interested", "callback_time": "Saturday 10 am",
+                                                             "key_points": "Asked about EMI"}}
+    with caplog.at_level(logging.INFO, logger="app.worker"):
+        assert client.worker.tick() is False  # nothing left to wait for
+    lead = client.get(f"/api/campaigns/{cid}").json()["leads"][0]
+    assert lead["callback_time"] == "Saturday 10 am" and lead["outcome"] == "interested"
+    assert any("extraction received" in r.getMessage() for r in caplog.records)
+    assert client.get("/api/me").json()["balance_paise"] == 50000 - 500  # billed once
+
+
+def test_gives_up_waiting_for_extraction_and_logs_what_bolna_sent(client, bolna, payments, caplog):
+    import logging
+    signup(client)
+    top_up(client, payments)
+    cid = ready_campaign(client, b"name,phone\nAsha,9876543210\n")
+    client.post(f"/api/campaigns/{cid}/start")
+    client.worker.tick()
+    bolna.executions["exec-0"] = {"id": "exec-0", "status": "completed", "transcript": "user: hi", "summary": "s"}
+    client.worker.tick()
+    with caplog.at_level(logging.WARNING, logger="app.worker"):
+        assert client.worker.tick(utcnow() + timedelta(minutes=11)) is False
+    warning = next(r.getMessage() for r in caplog.records if "no extraction" in r.getMessage())
+    assert "execution_fields=id,status,summary,transcript" in warning

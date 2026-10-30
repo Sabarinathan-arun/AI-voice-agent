@@ -14,6 +14,9 @@ log = logging.getLogger(__name__)
 
 IDLE_CHECK_SECONDS = 60
 PURGE_EVERY = timedelta(hours=1)
+# Bolna fills Outcome / Call booked for / Key points in a follow-up task after the call, so an answered call's
+# execution is re-read for this long until its extracted_data appears.
+EXTRACTION_WAIT = timedelta(minutes=10)
 
 NOT_REACHED = {"no-answer": "no_answer", "busy": "busy", "failed": "failed", "error": "failed",
                "canceled": "cancelled", "cancelled": "cancelled", "stopped": "cancelled",
@@ -143,12 +146,24 @@ def log_call_result(lead: dict, execution: dict, fields: dict) -> None:
     roles = re.findall(r"^\s*(\w+)\s*:", transcript, flags=re.M)
     telephony = execution.get("telephony_data") or {}
     log.info("call finished: execution=%s status=%s outcome=%s duration=%ss agent_turns=%d customer_turns=%d "
-             "hangup=%s error=%s", execution.get("id") or lead.get("execution_id"), fields.get("status"),
-             fields.get("outcome"), fields.get("duration_seconds"),
+             "hangup=%s error=%s extracted=%s execution_fields=%s", execution.get("id") or lead.get("execution_id"),
+             fields.get("status"), fields.get("outcome"), fields.get("duration_seconds"),
              sum(1 for r in roles if r.lower() in ("assistant", "agent", "bot")),
              sum(1 for r in roles if r.lower() in ("user", "customer", "human")),
              telephony.get("hangup_reason") or telephony.get("hangup_by") or "-",
-             (execution.get("error_message") or execution.get("error") or "-"))
+             (execution.get("error_message") or execution.get("error") or "-"),
+             _extracted_keys(execution), ",".join(sorted(execution)))
+
+
+def _extracted_keys(execution: dict) -> str:
+    """The field names (not values) of Bolna's extracted_data, or "none"."""
+    data = execution.get("extracted_data")
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except ValueError:
+            return "text"
+    return ",".join(sorted(data)) if isinstance(data, dict) and data else "none"
 
 
 def call_cost_paise(seconds: float, price_per_minute_paise: int) -> int:
@@ -167,6 +182,7 @@ class CampaignWorker:
         self._thread: threading.Thread | None = None
         self._tick_lock = threading.Lock()
         self._last_purge: datetime | None = None
+        self._awaiting_extraction: dict[int, tuple[str, datetime]] = {}  # lead id -> (execution id, give-up time)
 
     # --- lifecycle -------------------------------------------------------------
 
@@ -203,12 +219,13 @@ class CampaignWorker:
             campaigns = self.store.active_campaigns()
             for campaign in campaigns:
                 self.process_campaign(campaign, now)
+            self.collect_extractions(now)
             if self._last_purge is None or now - self._last_purge >= PURGE_EVERY:
                 deleted = self.store.purge_expired(now, timedelta(days=self.settings.results_retention_days))
                 if deleted:
                     log.info("deleted %d expired campaign(s) and their lead data", deleted)
                 self._last_purge = now
-            return bool(campaigns)
+            return bool(campaigns) or bool(self._awaiting_extraction)
 
     # --- calls -----------------------------------------------------------------
 
@@ -275,8 +292,33 @@ class CampaignWorker:
         self.store.update_lead(lead["id"], **fields)
         if fields.get("status") in TERMINAL_STATUSES and lead.get("status") not in TERMINAL_STATUSES:
             log_call_result(lead, execution, fields)
+        if fields.get("status") == "completed":  # answered: wait for Bolna's follow-up extraction
+            extracted = _extracted_keys(execution)
+            if extracted == "none" and lead["id"] not in self._awaiting_extraction:
+                self._awaiting_extraction[lead["id"]] = (execution.get("id") or lead["execution_id"],
+                                                         utcnow() + EXTRACTION_WAIT)
+            elif extracted != "none" and self._awaiting_extraction.pop(lead["id"], None):
+                log.info("extraction received: execution=%s extracted=%s", execution.get("id"), extracted)
         if fields.get("status") in TERMINAL_STATUSES:
             self.bill(lead, fields.get("duration_seconds") or 0)
+
+    def collect_extractions(self, now: datetime) -> None:
+        """Re-read answered calls until Bolna's extraction (Call booked for, Key points) arrives, or give up."""
+        for lead_id, (execution_id, give_up) in list(self._awaiting_extraction.items()):
+            lead = self.store.get_lead_by_execution(execution_id)
+            if lead is None:  # campaign deleted
+                self._awaiting_extraction.pop(lead_id, None)
+                continue
+            try:
+                execution = self.bolna.get_execution(execution_id)
+            except BolnaError as exc:
+                log.warning("could not fetch execution %s: %s", execution_id, exc)
+                continue
+            self.apply_execution(lead, execution)
+            if lead_id in self._awaiting_extraction and now >= give_up:
+                self._awaiting_extraction.pop(lead_id, None)
+                log.warning("no extraction from Bolna for execution=%s after %d min; execution_fields=%s",
+                            execution_id, EXTRACTION_WAIT.seconds // 60, ",".join(sorted(execution)))
 
     def bill(self, lead: dict, seconds: float) -> None:
         """Charge an answered call once. Unanswered calls (0 seconds) are free."""
