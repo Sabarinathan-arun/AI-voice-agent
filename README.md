@@ -117,6 +117,11 @@ Bolna's extraction (configured in the agent's `llm_config`) decides; if it retur
 A call where the customer agreed a time is marked Interested and the time appears under **Call booked for**.
 Calls nobody spoke on show **No answer**, as do unanswered and busy calls.
 
+**How the columns are filled:** each Bolna agent has a second, follow-up task (`task_type: "extraction"`) that
+reads the transcript after the call and fills `outcome`, `callback_time` and `key_points` (`EXTRACTION_FIELDS` in
+`app/bolna.py`); the results reach the app through Bolna's webhook a few seconds after the call. If Bolna refuses
+the task, the agent is created without it and the log line `Bolna agent created: ... extraction=OFF` says so.
+
 ### Bolna
 
 1. Paid Bolna account (trial accounts can only call verified numbers), an outbound number, and `BOLNA_API_KEY`.

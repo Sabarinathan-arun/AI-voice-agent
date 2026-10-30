@@ -67,14 +67,31 @@ STILL_THERE = {
 # Used if the Bolna account doesn't offer the template's AI model (gpt-4.1).
 FALLBACK_LLM = "gpt-4o-mini"
 
-EXTRACTION_PROMPT = (
-    "outcome : interested or not_interested. interested = the customer showed interest, asked for details, "
-    "agreed to a visit/demo/meeting or asked to be called back; not_interested = the customer declined or was not "
-    "keen. Use wrong_number only if the person said it is the wrong number.\n"
-    "callback_time : The date and time the customer agreed for a call back, visit, demo or meeting, exactly as "
-    "they said it (for example \"Saturday 10 am\"); empty if none.\n"
-    "key_points : One short sentence with the customer's main questions, objections or commitments."
-)
+# Fields Bolna's extraction task fills from the transcript after each call (Outcome, Call booked for, Key points).
+EXTRACTION_FIELDS = {
+    "outcome": "interested or not_interested. interested = the customer showed interest, asked for details, agreed "
+               "to a visit/demo/meeting or asked to be called back; not_interested = the customer declined or was "
+               "not keen. Use wrong_number only if the person said it is the wrong number.",
+    "callback_time": "The date and time the customer agreed for a call back, visit, demo or meeting, exactly as they "
+                     "said it (for example \"Saturday 10 am\"); empty if none.",
+    "key_points": "One short sentence with the customer's main questions, objections or commitments.",
+}
+EXTRACTION_PROMPT = "\n".join(f"{key} : {text}" for key, text in EXTRACTION_FIELDS.items())
+
+
+def extraction_task(conversation_llm: dict) -> dict:
+    """Bolna runs an agent's tasks in order; this one reads the finished call's transcript and fills
+    EXTRACTION_FIELDS (returned as the execution's extracted_data). The fields are given both as text
+    (extraction_details, which Bolna turns into a field list) and as that field list (extraction_json)."""
+    llm_config = {"provider": conversation_llm.get("provider", "openai"), "family": conversation_llm.get("family", "openai"),
+                  "model": "gpt-4.1-mini", "max_tokens": 400, "temperature": 0.1, "request_json": True,
+                  "extraction_details": EXTRACTION_PROMPT, "extraction_json": json.dumps(EXTRACTION_FIELDS)}
+    return {
+        "task_type": "extraction",
+        "tools_config": {"llm_agent": {"agent_type": "simple_llm_agent", "agent_flow_type": "streaming",
+                                       "extraction_details": EXTRACTION_PROMPT, "llm_config": llm_config}},
+        "toolchain": {"execution": "sequential", "pipelines": [["llm"]]},
+    }
 
 # How people really talk on the phone in each language: spoken forms, not the written/textbook grammar.
 SPOKEN_STYLE = {
@@ -287,13 +304,14 @@ def transcriber_for(base: dict, language: str, region: bool = False) -> dict:
 
 
 def build_agent_payload(template_path: str, campaign: dict, webhook_url: str | None, voice: dict | None = None,
-                        region_codes: bool = False, auto_language: bool = True) -> dict:
+                        region_codes: bool = False, auto_language: bool = True, extraction: bool = True) -> dict:
     """The Bolna agent for a campaign, starting in the campaign's language.
 
     auto_language=True: one Sarvam transcriber detects the language the customer speaks (language "unknown"), Bolna
     points the Sarvam voice at it after each reply, and the AI answers in it, so the call follows the customer.
     (Bolna's per-language transcriber/voice pools stopped the agent hearing callers, so they are not used.)
-    auto_language=False: the call stays in the campaign language. region_codes: "ta-IN" instead of "ta"."""
+    auto_language=False: the call stays in the campaign language. region_codes: "ta-IN" instead of "ta".
+    extraction: add the follow-up task that fills Outcome, Call booked for and Key points."""
     with open(template_path) as f:
         payload = copy.deepcopy(json.load(f))
     cfg = payload.setdefault("agent_config", {})
@@ -316,6 +334,9 @@ def build_agent_payload(template_path: str, campaign: dict, webhook_url: str | N
         if voice and tools.get("synthesizer") is not None:
             synth = tools["synthesizer"]
             synth["provider"], synth["provider_config"] = voice_for_language(voice, language, region_codes)
+    if extraction and cfg.get("tasks"):
+        conversation_llm = cfg["tasks"][0].get("tools_config", {}).get("llm_agent", {}).get("llm_config") or {}
+        cfg["tasks"].append(extraction_task(conversation_llm))
     payload.setdefault("agent_prompts", {}).setdefault("task_1", {})["system_prompt"] = build_system_prompt(
         campaign, (voice or {}).get("name", ""), switch_languages=auto_language)
     return payload
@@ -368,27 +389,32 @@ class BolnaClient:
         attempts = [(True, False), (True, True), (False, False), (False, True)]
         if not self.settings.language_switching:  # LANGUAGE_SWITCHING=false
             attempts = [a for a in attempts if not a[0]]
+        # The same again without the extraction task, should Bolna refuse it (calls matter more than the columns).
+        attempts = [(*a, True) for a in attempts] + [(*a, False) for a in attempts]
         for llm_model in (None, FALLBACK_LLM):
-            for auto_language, region in attempts:
+            for auto_language, region, extraction in attempts:
                 payload = build_agent_payload(self.settings.bolna_agent_template, campaign, webhook_url, voice,
-                                              region_codes=region, auto_language=auto_language)
+                                              region_codes=region, auto_language=auto_language,
+                                              extraction=extraction)
                 llm_config = payload["agent_config"]["tasks"][0]["tools_config"]["llm_agent"]["llm_config"]
                 model = llm_model or llm_config["model"]
                 llm_config["model"] = model
                 try:
                     data = self._request("POST", "/v2/agent", json=payload)
-                    log.info("Bolna agent created: model=%s, language switching=%s, language codes=%s", model,
+                    log.info("Bolna agent created: model=%s, language switching=%s, language codes=%s, "
+                             "extraction=%s", model,
                              "on (auto-detect)" if auto_language else
                              ("OFF (not accepted by Bolna)" if self.settings.language_switching
                               else "off (LANGUAGE_SWITCHING=false)"),
-                             "region (ta-IN)" if region else "plain (ta)")
+                             "region (ta-IN)" if region else "plain (ta)",
+                             "on" if extraction else "OFF (not accepted by Bolna)")
                     return data
                 except BolnaError as exc:
                     if " 400: " not in str(exc):
                         raise
                     error = exc
-                    log.warning("Bolna refused agent (model=%s, auto_language=%s, region_codes=%s): %s",
-                                model, auto_language, region, exc)
+                    log.warning("Bolna refused agent (model=%s, auto_language=%s, region_codes=%s, extraction=%s): %s",
+                                model, auto_language, region, extraction, exc)
             if llm_model is None and model in str(error) and model != FALLBACK_LLM:
                 continue  # the AI model isn't available on this Bolna account
             raise error

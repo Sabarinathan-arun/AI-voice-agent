@@ -232,7 +232,7 @@ def test_falls_back_to_a_smaller_ai_model_if_bolna_lacks_it(settings):
     campaign = {"id": "abcdefgh123", "business_name": "Acme", "product_details": "p", "sales_instructions": "s",
                 "language": "Tamil"}
     assert client.create_agent(campaign, None, load_voices(settings.voices_path)[0]) == "agent-11"
-    assert models == ["gpt-4.1"] * 4 + ["gpt-4o-mini"]
+    assert models == ["gpt-4.1"] * 8 + ["gpt-4o-mini"]
 
 
 def test_sales_script_shows_colloquial_examples_in_native_script(settings):
@@ -275,3 +275,47 @@ def test_opening_line_and_check_in_are_in_the_call_language(settings):
     single = build_agent_payload(settings.bolna_agent_template, {**base, "language": "Tamil"}, None, kavya,
                                  auto_language=False)
     assert single["agent_config"]["tasks"][0]["task_config"]["check_user_online_message"] == "ஹலோ, கேக்குதா?"
+
+
+def test_agent_has_a_follow_up_task_that_fills_the_result_columns(settings):
+    from app.bolna import EXTRACTION_FIELDS, load_voices
+    campaign = {"id": "abcdefgh123", "business_name": "Acme", "product_details": "p", "sales_instructions": "s",
+                "language": "Tamil"}
+    tasks = build_agent_payload(settings.bolna_agent_template, campaign, None,
+                                load_voices(settings.voices_path)[1])["agent_config"]["tasks"]
+    assert [t["task_type"] for t in tasks] == ["conversation", "extraction"]
+    agent = tasks[1]["tools_config"]["llm_agent"]
+    assert set(json.loads(agent["llm_config"]["extraction_json"])) == {"outcome", "callback_time", "key_points"}
+    assert "callback_time" in agent["extraction_details"] and agent["llm_config"]["extraction_details"]
+    assert tasks[1]["toolchain"]["pipelines"] == [["llm"]] and set(EXTRACTION_FIELDS) == {"outcome", "callback_time", "key_points"}
+    without = build_agent_payload(settings.bolna_agent_template, campaign, None, load_voices(settings.voices_path)[1],
+                                  extraction=False)["agent_config"]["tasks"]
+    assert [t["task_type"] for t in without] == ["conversation"]
+
+
+def test_agent_created_without_extraction_if_bolna_refuses_it(settings):
+    from app.bolna import BolnaClient, load_voices
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        tasks = json.loads(request.content)["agent_config"]["tasks"]
+        seen.append(len(tasks))
+        if len(tasks) > 1:
+            return httpx.Response(400, json={"message": "Invalid task_type extraction"})
+        return httpx.Response(200, json={"agent_id": "agent-12"})
+
+    client = BolnaClient(dataclasses.replace(settings, bolna_api_key="k"))
+    client._http = httpx.Client(base_url="https://api.bolna.ai", transport=httpx.MockTransport(handler))
+    campaign = {"id": "abcdefgh123", "business_name": "Acme", "product_details": "p", "sales_instructions": "s",
+                "language": "Tamil"}
+    assert client.create_agent(campaign, None, load_voices(settings.voices_path)[1]) == "agent-12"
+    assert seen[-1] == 1 and seen.count(2) == 4  # tried every language setup with it first
+
+
+def test_extraction_results_fill_the_columns():
+    from app.worker import parse_execution
+    fields = parse_execution({"status": "completed", "transcript": "assistant: hi\nuser: sari, Saturday vaanga",
+                              "extracted_data": {"outcome": "interested", "callback_time": "Saturday 10 am",
+                                                 "key_points": "Asked about EMI"}})
+    assert (fields["outcome"], fields["callback_time"], fields["key_points"]) == (
+        "interested", "Saturday 10 am", "Asked about EMI")
