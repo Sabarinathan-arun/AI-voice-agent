@@ -147,7 +147,7 @@ def test_each_language_gets_a_voice_and_transcriber_that_speak_it(settings):
         return t["synthesizer"], t["transcriber"], payload["agent_prompts"]["task_1"]["system_prompt"]
 
     # One male and one female Sarvam voice, each speaking every call language; the customer's choice decides.
-    for voice_id, speaker in (("arjun", "shubh"), ("kavya", "ritu")):
+    for voice_id, speaker in (("arjun", "shubh"), ("kavya", "simran")):
         for language, code in LANGUAGES.items():
             synth, transcriber, prompt = tools(language, voice_id)
             assert synth["provider"] == "sarvam" and synth["provider_config"] == {

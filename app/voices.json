@@ -17,11 +17,11 @@
     "id": "kavya",
     "name": "Kavya",
     "gender": "Female",
-    "description": "Friendly, calm and clear",
+    "description": "Young, bright and friendly",
     "provider": "sarvam",
     "provider_config": {
-      "voice": "Ritu",
-      "voice_id": "ritu",
+      "voice": "Simran",
+      "voice_id": "simran",
       "model": "bulbul:v3",
       "speed": 1
     },
