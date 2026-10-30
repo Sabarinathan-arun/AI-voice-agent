@@ -214,3 +214,36 @@ def test_agent_retried_with_region_language_codes_if_bolna_asks(settings):
     with pytest.raises(BolnaError, match="Invalid API key"):
         client.create_agent(campaign, None, load_voices(settings.voices_path)[1])
     assert sent == [1]
+
+
+def test_falls_back_to_a_smaller_ai_model_if_bolna_lacks_it(settings):
+    from app.bolna import BolnaClient, load_voices
+    models = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        model = json.loads(request.content)["agent_config"]["tasks"][0]["tools_config"]["llm_agent"]["llm_config"]["model"]
+        models.append(model)
+        if model == "gpt-4.1":
+            return httpx.Response(400, json={"message": "Model gpt-4.1 is not available on your plan"})
+        return httpx.Response(200, json={"agent_id": "agent-11"})
+
+    client = BolnaClient(dataclasses.replace(settings, bolna_api_key="k"))
+    client._http = httpx.Client(base_url="https://api.bolna.ai", transport=httpx.MockTransport(handler))
+    campaign = {"id": "abcdefgh123", "business_name": "Acme", "product_details": "p", "sales_instructions": "s",
+                "language": "Tamil"}
+    assert client.create_agent(campaign, None, load_voices(settings.voices_path)[0]) == "agent-11"
+    assert models == ["gpt-4.1"] * 4 + ["gpt-4o-mini"]
+
+
+def test_sales_script_shows_colloquial_examples_in_native_script(settings):
+    from app.bolna import COLLOQUIAL_EXAMPLES, LANGUAGES, build_system_prompt
+    assert set(COLLOQUIAL_EXAMPLES) == set(LANGUAGES)
+    campaign = {"business_name": "Acme", "product_details": "p", "sales_instructions": "s", "language": "Tamil"}
+    prompt = build_system_prompt(campaign, "Kavya", switch_languages=True)
+    assert "never like a newsreader" in prompt
+    assert 'Not: "உங்களிடம் சிறிது நேரம் இருக்கிறதா?"  ->  Say: "ஒரு ரெண்டு நிமிஷம் பேசலாமா?"' in prompt
+    for examples in COLLOQUIAL_EXAMPLES.values():  # every language the call may switch to
+        assert examples[0][1] in prompt
+    template = json.load(open(settings.bolna_agent_template))
+    llm = template["agent_config"]["tasks"][0]["tools_config"]["llm_agent"]["llm_config"]
+    assert llm["model"] == "gpt-4.1"

@@ -84,6 +84,10 @@ and sales script, different voice. Both are Sarvam `bulbul:v3` voices, which spe
 
 - Speech recognition: English calls use Deepgram (template); every other language uses Sarvam `saaras:v3`
   with the language set, so the agent understands the customer.
+- **Colloquial speech:** the sales script opens with "sound like a local person chatting, never like a newsreader"
+  and gives, for every language, bookish sentences next to how people really say them, in that language's script
+  (`COLLOQUIAL_EXAMPLES` in `app/bolna.py`). Calls use OpenAI `gpt-4.1` (temperature 0.7), which writes far more
+  natural Indian-language speech than `gpt-4o-mini`; if the Bolna account doesn't offer it, `gpt-4o-mini` is used.
 - **Language switching:** each agent carries a transcriber and the same voice for every call language
   (Bolna `multilingual` pools, labelled `en`, `hi`, `ta`, …) and starts in the campaign's language. When the
   customer answers in, or asks for, another language, the AI switches (Bolna's `switch_language` tool) and carries

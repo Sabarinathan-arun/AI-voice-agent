@@ -42,6 +42,8 @@ SCRIPTS = {
 # Speech recognition for Indian languages: Sarvam saaras:v3 understands all of them (and Indian English mixed in);
 # English calls keep the template's transcriber (Deepgram).
 INDIAN_TRANSCRIBER = {"provider": "sarvam", "model": "saaras:v3"}
+# Used if the Bolna account doesn't offer the template's AI model (gpt-4.1).
+FALLBACK_LLM = "gpt-4o-mini"
 
 EXTRACTION_PROMPT = (
     "outcome : interested or not_interested. interested = the customer showed interest, asked for details, "
@@ -71,6 +73,36 @@ SPOKEN_STYLE = {
     "Gujarati": "Use everyday spoken Gujarati, not formal Gujarati; \"haa\", \"saru\", \"barabar\" and common English "
                 "words are normal.",
     "English": "Use simple, friendly Indian English as spoken on a phone call, not formal written English.",
+}
+
+# Bookish sentence -> how a local person says it on a call, in the language's own script. The AI copies these.
+COLLOQUIAL_EXAMPLES = {
+    "English": [("Would you have some time available to discuss our offering?", "Got two minutes? I'll be quick."),
+                ("We would like to inform you about a special offer.", "We've got a really good offer for you.")],
+    "Hindi": [("क्या आपके पास कुछ समय उपलब्ध है?", "आपके पास दो मिनट हैं क्या?"),
+              ("हम आपको एक विशेष प्रस्ताव देना चाहते हैं।", "आपके लिए एक बढ़िया offer है।"),
+              ("धन्यवाद, आपका दिन शुभ हो।", "ठीक है जी, thank you!")],
+    "Tamil": [("உங்களிடம் சிறிது நேரம் இருக்கிறதா?", "ஒரு ரெண்டு நிமிஷம் பேசலாமா?"),
+              ("நாங்கள் உங்களுக்கு ஒரு சிறப்பு சலுகையை வழங்க விரும்புகிறோம்.", "உங்களுக்காக ஒரு நல்ல offer இருக்கு."),
+              ("நீங்கள் எப்போது வசதியாக இருப்பீர்கள்?", "உங்களுக்கு எப்போ free-ஆ இருக்கும்?")],
+    "Telugu": [("మీకు కొంత సమయం లభ్యమవుతుందా?", "ఒక రెండు నిమిషాలు మాట్లాడొచ్చా?"),
+               ("మేము మీకు ఒక ప్రత్యేక ఆఫర్ అందించాలనుకుంటున్నాము.", "మీ కోసం ఒక మంచి offer ఉందండి."),
+               ("మీకు ఎప్పుడు అనుకూలంగా ఉంటుంది?", "మీకు ఎప్పుడు free గా ఉంటుంది?")],
+    "Kannada": [("ನಿಮ್ಮ ಬಳಿ ಸ್ವಲ್ಪ ಸಮಯ ಇದೆಯೇ?", "ಒಂದು ಎರಡು ನಿಮಿಷ ಮಾತಾಡಬಹುದಾ?"),
+                ("ನಾವು ನಿಮಗೆ ಒಂದು ವಿಶೇಷ ಕೊಡುಗೆಯನ್ನು ನೀಡಲು ಬಯಸುತ್ತೇವೆ.", "ನಿಮಗೋಸ್ಕರ ಒಂದು ಒಳ್ಳೆ offer ಇದೆ."),
+                ("ನಿಮಗೆ ಯಾವಾಗ ಅನುಕೂಲವಾಗುತ್ತದೆ?", "ನಿಮಗೆ ಯಾವಾಗ free ಇರುತ್ತೆ?")],
+    "Malayalam": [("താങ്കൾക്ക് അല്പം സമയം ലഭ്യമാണോ?", "ഒരു രണ്ട് മിനിറ്റ് സംസാരിക്കാമോ?"),
+                  ("ഞങ്ങൾ താങ്കൾക്ക് ഒരു പ്രത്യേക ഓഫർ നൽകാൻ ആഗ്രഹിക്കുന്നു.", "നിങ്ങൾക്ക് വേണ്ടി ഒരു നല്ല offer ഉണ്ട്."),
+                  ("താങ്കൾക്ക് എപ്പോഴാണ് സൗകര്യം?", "എപ്പോഴാ നിങ്ങൾക്ക് free?")],
+    "Marathi": [("आपल्याकडे थोडा वेळ उपलब्ध आहे का?", "दोन मिनिटं बोलू शकतो का?"),
+                ("आम्ही आपल्याला एक विशेष प्रस्ताव देऊ इच्छितो.", "तुमच्यासाठी एक मस्त offer आहे."),
+                ("आपल्याला केव्हा सोयीचे होईल?", "तुम्हाला कधी free वेळ आहे?")],
+    "Bengali": [("আপনার কাছে কি কিছু সময় উপলব্ধ আছে?", "দু মিনিট কথা বলা যাবে?"),
+                ("আমরা আপনাকে একটি বিশেষ প্রস্তাব দিতে চাই।", "আপনার জন্য একটা ভালো offer আছে।"),
+                ("আপনার কখন সুবিধা হবে?", "কখন free থাকবেন?")],
+    "Gujarati": [("શું આપની પાસે થોડો સમય ઉપલબ્ધ છે?", "બે મિનિટ વાત કરી શકીએ?"),
+                 ("અમે આપને એક વિશેષ પ્રસ્તાવ આપવા માંગીએ છીએ.", "તમારા માટે એક સરસ offer છે."),
+                 ("આપને ક્યારે અનુકૂળ રહેશે?", "તમે ક્યારે free છો?")],
 }
 
 SINGLE_BRACE_VAR = re.compile(r"(?<!\{)\{(\w+)\}(?!\})")
@@ -121,12 +153,19 @@ def _language_rules(language: str, switch_languages: bool) -> str:
     return "\n".join(lines)
 
 
+def _examples(language: str) -> str:
+    return "\n".join(f'    Not: "{bookish}"  ->  Say: "{spoken}"' for bookish, spoken in COLLOQUIAL_EXAMPLES[language])
+
+
 def _spoken_styles(language: str, switch_languages: bool) -> str:
-    """Everyday-speech guidance for the call language, and for every language the call may switch to."""
-    lines = [f"- {SPOKEN_STYLE.get(language, SPOKEN_STYLE['English'])}"]
+    """Everyday-speech guidance and examples for the call language, and every language the call may switch to."""
+    lines = [f"- {SPOKEN_STYLE.get(language, SPOKEN_STYLE['English'])}",
+             f"- Examples in {language} (copy this style):", _examples(language)]
     if switch_languages:
         lines.append("- After switching, speak the new language in the same everyday way:")
-        lines += [f"  - {name}: {style}" for name, style in SPOKEN_STYLE.items() if name != language]
+        for name, style in SPOKEN_STYLE.items():
+            if name != language:
+                lines += [f"  - {name}: {style}", _examples(name)]
     return "\n".join(lines)
 
 
@@ -137,6 +176,13 @@ def build_system_prompt(campaign: dict, agent_name: str = "", switch_languages: 
     return f"""You are a real-sounding sales caller for {business}, on a phone call with {{{{customer_name}}}}.
 Start the call in {language}.
 {_language_rules(language, switch_languages)}
+
+## Most important: sound like a local person chatting, never like a newsreader
+- You are a friendly salesperson from the customer's own town, talking casually on the phone. Not a news
+  anchor, not a textbook, not a government notice.
+- Before you say anything, ask yourself: would this sentence look right in a newspaper or a school book? If yes,
+  it is wrong. Say it the short, simple way people say it to a neighbour.
+- Never use pure, formal or Sanskritised words when a simple everyday word or a common English word exists.
 
 ## How to sound human on the phone
 - Talk the way people actually talk on a call: short, simple sentences, one idea at a time. Usually one or two
@@ -282,23 +328,35 @@ class BolnaClient:
         return resp.json() if resp.content else {}
 
     def create_agent(self, campaign: dict, webhook_url: str | None, voice: dict | None = None) -> str:
-        # Most capable first: language switching with "ta" codes; if Bolna refuses (400), "ta-IN" codes, then a
-        # single-language agent. Other errors (auth, network, 5xx) are reported straight away.
-        attempts = [(True, False), (True, True), (False, False), (False, True)]
-        for number, (multilingual, region) in enumerate(attempts, 1):
-            payload = build_agent_payload(self.settings.bolna_agent_template, campaign, webhook_url, voice,
-                                          region_codes=region, multilingual=multilingual)
-            try:
-                data = self._request("POST", "/v2/agent", json=payload)
-                break
-            except BolnaError as exc:
-                if " 400: " not in str(exc) or number == len(attempts):
-                    raise
-                log.warning("Bolna refused agent (multilingual=%s, region_codes=%s): %s", multilingual, region, exc)
+        data = self._create_agent(campaign, webhook_url, voice)
         agent_id = data.get("agent_id") or data.get("id")
         if not agent_id:
             raise BolnaError(f"Bolna did not return an agent_id: {data}")
         return agent_id
+
+    def _create_agent(self, campaign: dict, webhook_url: str | None, voice: dict | None) -> dict:
+        """Most capable first: language switching with "ta" codes; if Bolna refuses (400), "ta-IN" codes, then a
+        single-language agent; and if Bolna refuses the template's AI model, all of that again with FALLBACK_LLM.
+        Other errors (auth, network, 5xx) are reported straight away."""
+        attempts = [(True, False), (True, True), (False, False), (False, True)]
+        for llm_model in (None, FALLBACK_LLM):
+            for multilingual, region in attempts:
+                payload = build_agent_payload(self.settings.bolna_agent_template, campaign, webhook_url, voice,
+                                              region_codes=region, multilingual=multilingual)
+                llm_config = payload["agent_config"]["tasks"][0]["tools_config"]["llm_agent"]["llm_config"]
+                model = llm_model or llm_config["model"]
+                llm_config["model"] = model
+                try:
+                    return self._request("POST", "/v2/agent", json=payload)
+                except BolnaError as exc:
+                    if " 400: " not in str(exc):
+                        raise
+                    error = exc
+                    log.warning("Bolna refused agent (model=%s, multilingual=%s, region_codes=%s): %s",
+                                model, multilingual, region, exc)
+            if llm_model is None and model in str(error) and model != FALLBACK_LLM:
+                continue  # the AI model isn't available on this Bolna account
+            raise error
 
     def delete_agent(self, agent_id: str) -> None:
         self._request("DELETE", f"/v2/agent/{agent_id}")
