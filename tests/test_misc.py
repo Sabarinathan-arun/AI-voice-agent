@@ -5,7 +5,7 @@ import json
 import httpx
 from openpyxl import load_workbook
 
-from app.bolna import build_agent_payload, call_user_data
+from app.bolna import BolnaError, build_agent_payload, call_user_data
 from app.export import build_results_workbook
 from app.payments import RazorpayPayments
 
@@ -39,7 +39,7 @@ def test_agent_payload_from_customer_details(settings):
     assert cfg["agent_welcome_message"] == "Hi {{customer_name}}, Acme here"
     assert cfg["webhook_url"] == "https://x/hook" and cfg["call_summary_enabled"] is True
     transcriber = cfg["tasks"][0]["tools_config"]["transcriber"]
-    assert (transcriber["provider"], transcriber["model"], transcriber["language"]) == ("sarvam", "saaras:v3", "hi-IN")
+    assert (transcriber["provider"], transcriber["model"], transcriber["language"]) == ("sarvam", "saaras:v3", "hi")
     prompt = payload["agent_prompts"]["task_1"]["system_prompt"]
     assert "Your name is Kajal" in prompt and "Sounding natural in Hindi" in prompt
     for text in ("Acme", "Solar since 2015", "3kW system", "Book a visit", "Speak in Hindi",
@@ -151,11 +151,39 @@ def test_each_language_gets_a_voice_and_transcriber_that_speak_it(settings):
             synth, transcriber, prompt = tools(language, voice_id)
             assert synth["provider"] == "sarvam" and synth["provider_config"] == {
                 "voice": speaker.title(), "voice_id": speaker, "model": "bulbul:v3", "speed": 1,
-                "language": f"{code}-IN"}
+                "language": code}
             if language == "English":
                 assert transcriber["provider"] == "deepgram" and transcriber["language"] == "en"
                 assert "English letters" not in prompt
             else:
-                assert transcriber["provider"] == "sarvam" and transcriber["language"] == f"{code}-IN"
+                assert transcriber["provider"] == "sarvam" and transcriber["language"] == code
                 assert "never in English letters" in prompt
     assert "Tamil script" in tools("Tamil", "kavya")[2]
+
+
+def test_agent_retried_with_region_language_codes_if_bolna_asks(settings):
+    from app.bolna import BolnaClient, load_voices
+    sent = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        tools = json.loads(request.content)["agent_config"]["tasks"][0]["tools_config"]
+        sent.append((tools["transcriber"]["language"], tools["synthesizer"]["provider_config"]["language"]))
+        if tools["transcriber"]["language"] == "ta":
+            return httpx.Response(400, json={"message": "Provided language: ta is not available for the model: saaras:v3"})
+        return httpx.Response(200, json={"agent_id": "agent-9"})
+
+    client = BolnaClient(dataclasses.replace(settings, bolna_api_key="k"))
+    client._http = httpx.Client(base_url="https://api.bolna.ai", transport=httpx.MockTransport(handler))
+    campaign = {"id": "abcdefgh123", "business_name": "Acme", "product_details": "p", "sales_instructions": "s",
+                "language": "Tamil"}
+    assert client.create_agent(campaign, None, load_voices(settings.voices_path)[1]) == "agent-9"
+    assert sent == [("ta", "ta"), ("ta-IN", "ta-IN")]
+
+    # Any other error is reported as is, without a second try.
+    sent.clear()
+    client._http = httpx.Client(base_url="https://api.bolna.ai", transport=httpx.MockTransport(
+        lambda r: (sent.append(1), httpx.Response(400, json={"message": "Invalid voice"}))[1]))
+    import pytest
+    with pytest.raises(BolnaError, match="Invalid voice"):
+        client.create_agent(campaign, None, load_voices(settings.voices_path)[1])
+    assert sent == [1]

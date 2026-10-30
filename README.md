@@ -83,7 +83,9 @@ and sales script, different voice. Both are Sarvam `bulbul:v3` voices, which spe
 | **Kavya** (female) | Sarvam Kavya (`kavya`) |
 
 - Speech recognition: English calls use Deepgram (template); every other language uses Sarvam `saaras:v3`
-  with the language set (`ta-IN`, `te-IN`, …), so the agent understands the customer.
+  with the language set, so the agent understands the customer.
+- Languages are sent to Bolna as `ta`, `te`, …; if Bolna rejects a language code for a model, the agent is
+  created again once with region codes (`ta-IN`).
 - The AI writes replies in the language's own script (e.g. Tamil script, not Tamil in English letters) so the
   voice pronounces them properly; everyday English words stay in English.
 - `name` is what customers see and how the agent introduces itself on calls.

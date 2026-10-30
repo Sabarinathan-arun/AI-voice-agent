@@ -84,12 +84,16 @@ def load_voices(path: str) -> list[dict]:
     return [v for v in voices if v.get("id") and v.get("provider") and v.get("provider_config")]
 
 
-def voice_for_language(voice: dict, language: str) -> tuple[str, dict]:
-    """The synthesizer (provider, provider_config) for the chosen agent, set to speak the campaign's language.
-    Sarvam takes region codes ("ta-IN"); other providers the bare code."""
-    config = copy.deepcopy(voice["provider_config"])
+def language_code(language: str, region: bool = False) -> str:
+    """Bolna's code for a call language: "ta" (what Bolna expects), or "ta-IN" with region=True."""
     code = LANGUAGES.get(language, "en")
-    config.setdefault("language", f"{code}-IN" if voice["provider"] == "sarvam" else code)
+    return f"{code}-IN" if region else code
+
+
+def voice_for_language(voice: dict, language: str, region: bool = False) -> tuple[str, dict]:
+    """The synthesizer (provider, provider_config) for the chosen agent, set to speak the campaign's language."""
+    config = copy.deepcopy(voice["provider_config"])
+    config.setdefault("language", language_code(language, region))
     return voice["provider"], config
 
 
@@ -157,7 +161,9 @@ def build_welcome_message(campaign: dict) -> str:
     return text.replace("{{business_name}}", campaign["business_name"])
 
 
-def build_agent_payload(template_path: str, campaign: dict, webhook_url: str | None, voice: dict | None = None) -> dict:
+def build_agent_payload(template_path: str, campaign: dict, webhook_url: str | None, voice: dict | None = None,
+                        region_codes: bool = False) -> dict:
+    """The Bolna agent for a campaign. region_codes: send languages as "ta-IN" instead of "ta"."""
     with open(template_path) as f:
         payload = copy.deepcopy(json.load(f))
     cfg = payload.setdefault("agent_config", {})
@@ -166,7 +172,7 @@ def build_agent_payload(template_path: str, campaign: dict, webhook_url: str | N
     cfg["webhook_url"] = webhook_url
     cfg.setdefault("call_summary_enabled", True)  # Bolna returns a summary only when this is on
     language = campaign.get("language") or "English"
-    code = LANGUAGES.get(language, "en")
+    code = language_code(language, region_codes)
     for task in cfg.get("tasks", []):
         tools = task.get("tools_config", {})
         llm_config = tools.get("llm_agent", {}).get("llm_config")
@@ -175,11 +181,12 @@ def build_agent_payload(template_path: str, campaign: dict, webhook_url: str | N
             llm_config.setdefault("extraction_details", EXTRACTION_PROMPT)
         if tools.get("transcriber") is not None:
             if language == "English":
-                tools["transcriber"]["language"] = code
+                tools["transcriber"]["language"] = language_code(language)
             else:
-                tools["transcriber"].update(INDIAN_TRANSCRIBER, language=f"{code}-IN")
+                tools["transcriber"].update(INDIAN_TRANSCRIBER, language=code)
         if voice and tools.get("synthesizer") is not None:
-            tools["synthesizer"]["provider"], tools["synthesizer"]["provider_config"] = voice_for_language(voice, language)
+            tools["synthesizer"]["provider"], tools["synthesizer"]["provider_config"] = voice_for_language(
+                voice, language, region_codes)
     payload.setdefault("agent_prompts", {}).setdefault("task_1", {})["system_prompt"] = build_system_prompt(
         campaign, (voice or {}).get("name", ""))
     return payload
@@ -220,7 +227,15 @@ class BolnaClient:
 
     def create_agent(self, campaign: dict, webhook_url: str | None, voice: dict | None = None) -> str:
         payload = build_agent_payload(self.settings.bolna_agent_template, campaign, webhook_url, voice)
-        data = self._request("POST", "/v2/agent", json=payload)
+        try:
+            data = self._request("POST", "/v2/agent", json=payload)
+        except BolnaError as exc:
+            # Bolna takes "ta"; should it want the region form ("ta-IN") for a model, try that once.
+            if " 400: " not in str(exc) or "language" not in str(exc).lower():
+                raise
+            payload = build_agent_payload(self.settings.bolna_agent_template, campaign, webhook_url, voice,
+                                          region_codes=True)
+            data = self._request("POST", "/v2/agent", json=payload)
         agent_id = data.get("agent_id") or data.get("id")
         if not agent_id:
             raise BolnaError(f"Bolna did not return an agent_id: {data}")
