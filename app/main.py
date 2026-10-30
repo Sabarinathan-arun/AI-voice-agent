@@ -197,7 +197,6 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, auth
         """The AI agents customers can choose from: both speak every call language, and each has a default opening
         line per language (used when the customer leaves it empty)."""
         return [{**{k: v.get(k, "") for k in ("id", "name", "gender", "description", "sample_url")},
-                 "languages": list(LANGUAGES),
                  "greetings": {language: default_greeting(language, v) for language in LANGUAGES}} for v in voices]
 
     # --- accounts ----------------------------------------------------------------

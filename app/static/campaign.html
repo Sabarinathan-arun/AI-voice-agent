@@ -175,7 +175,6 @@ function renderVoices(voices) {
         <span class="voice-avatar ${v.gender === 'Female' ? 'f' : 'm'}" aria-hidden="true">${esc((v.name || '?')[0])}</span>
         <span><b>${esc(v.name)}</b><span class="voice-meta">${esc(v.gender || '')}${v.description ? ' · ' + esc(v.description) : ''}</span></span>
       </span>
-      ${(v.languages || []).length ? `<span class="voice-langs">Speaks ${esc(v.languages.join(', '))}</span>` : ''}
       ${v.sample_url ? `<audio controls preload="none" src="${esc(v.sample_url)}"></audio>` : ''}
     </label>`).join('');
   document.querySelectorAll('input[name=voice]').forEach(r => r.onchange = updatePlaceholder);

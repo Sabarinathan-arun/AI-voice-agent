@@ -3,7 +3,7 @@
     "id": "arjun",
     "name": "Arjun",
     "gender": "Male",
-    "description": "Warm, confident and friendly",
+    "description": "Warm, confident and casual",
     "provider": "sarvam",
     "provider_config": {
       "voice": "Shubh",
@@ -17,7 +17,7 @@
     "id": "kavya",
     "name": "Kavya",
     "gender": "Female",
-    "description": "Young, bright and friendly",
+    "description": "Young, cheerful and casual",
     "provider": "sarvam",
     "provider_config": {
       "voice": "Simran",
