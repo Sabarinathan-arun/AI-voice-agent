@@ -20,8 +20,8 @@
     "description": "Friendly, calm and clear",
     "provider": "sarvam",
     "provider_config": {
-      "voice": "Kavya",
-      "voice_id": "kavya",
+      "voice": "Ritu",
+      "voice_id": "ritu",
       "model": "bulbul:v3",
       "speed": 1
     },

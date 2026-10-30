@@ -80,7 +80,7 @@ and sales script, different voice. Both are Sarvam `bulbul:v3` voices, which spe
 | Agent | Voice |
 |---|---|
 | **Arjun** (male) | Sarvam Shubh (`shubh`) |
-| **Kavya** (female) | Sarvam Kavya (`kavya`) |
+| **Kavya** (female) | Sarvam Ritu (`ritu`), the voice behind Sarvam's sales and customer-service styles |
 
 - Speech recognition: English calls use Deepgram (template); every other language uses Sarvam `saaras:v3`
   with the language set, so the agent understands the customer.
@@ -98,7 +98,7 @@ and sales script, different voice. Both are Sarvam `bulbul:v3` voices, which spe
   voice pronounces them properly; everyday English words stay in English.
 - `name` is what customers see and how the agent introduces itself on calls.
 - `sample_url`: a link to a short sample of the voice, to show a play button.
-- Other `bulbul:v3` voices: female `ritu`, `priya`, `neha`, `pooja`, `simran`, `ishita`, `shreya`; male `aditya`,
+- Other `bulbul:v3` voices: female `kavya`, `priya`, `neha`, `pooja`, `simran`, `ishita`, `shreya`; male `aditya`,
   `rahul`, `rohan`, `amit`, `dev`, `varun` (change `voice` and `voice_id`). `bulbul:v2` voices no longer work.
 
 ### Outcomes
