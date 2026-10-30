@@ -98,6 +98,9 @@ and sales script, different voice. Both are Sarvam `bulbul:v3` voices, which spe
   (Bolna `multilingual` pools, labelled `en`, `hi`, `ta`, …) and starts in the campaign's language. When the
   customer answers in, or asks for, another language, the AI switches (Bolna's `switch_language` tool) and carries
   on in that language, colloquially. Only the languages a call uses are connected.
+- `LANGUAGE_SWITCHING=false` (Render environment) turns switching off: each call stays in the campaign language.
+- After each call the server logs `call finished: ... agent_turns=N customer_turns=N hangup=...` (no names, numbers
+  or transcript text); `customer_turns=0` means the agent heard nothing.
 - If Bolna refuses the agent (400), it is created again with region codes (`ta-IN`), then as a single-language
   agent, so a campaign always starts; the refusals are logged.
 - The AI writes replies in the language's own script (e.g. Tamil script, not Tamil in English letters) so the

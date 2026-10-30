@@ -135,6 +135,22 @@ def _outcome(status: str, extracted: dict, transcript: str | None, summary: str 
     return "not_interested"
 
 
+def log_call_result(lead: dict, execution: dict, fields: dict) -> None:
+    """One line per finished call, to diagnose calls from the server logs: how many times the agent and the
+    customer spoke (customer turns 0 = the agent heard nothing), how long it ran and why it ended.
+    No transcript text or phone numbers are logged."""
+    transcript = fields.get("transcript") or ""
+    roles = re.findall(r"^\s*(\w+)\s*:", transcript, flags=re.M)
+    telephony = execution.get("telephony_data") or {}
+    log.info("call finished: execution=%s status=%s outcome=%s duration=%ss agent_turns=%d customer_turns=%d "
+             "hangup=%s error=%s", execution.get("id") or lead.get("execution_id"), fields.get("status"),
+             fields.get("outcome"), fields.get("duration_seconds"),
+             sum(1 for r in roles if r.lower() in ("assistant", "agent", "bot")),
+             sum(1 for r in roles if r.lower() in ("user", "customer", "human")),
+             telephony.get("hangup_reason") or telephony.get("hangup_by") or "-",
+             (execution.get("error_message") or execution.get("error") or "-"))
+
+
 def call_cost_paise(seconds: float, price_per_minute_paise: int) -> int:
     """Per-second billing at the per-minute rate, rounded up to the next paisa."""
     return math.ceil(seconds * price_per_minute_paise / 60) if seconds > 0 else 0
@@ -257,6 +273,8 @@ class CampaignWorker:
     def apply_execution(self, lead: dict, execution: dict) -> None:
         fields = {k: v for k, v in parse_execution(execution).items() if v is not None}
         self.store.update_lead(lead["id"], **fields)
+        if fields.get("status") in TERMINAL_STATUSES and lead.get("status") not in TERMINAL_STATUSES:
+            log_call_result(lead, execution, fields)
         if fields.get("status") in TERMINAL_STATUSES:
             self.bill(lead, fields.get("duration_seconds") or 0)
 

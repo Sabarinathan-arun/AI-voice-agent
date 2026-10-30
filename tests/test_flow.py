@@ -390,3 +390,41 @@ def test_campaign_list_counts(client, bolna, payments):
     bolna.executions["exec-0"] = {"id": "exec-0", "status": "busy"}
     client.worker.tick()
     assert counts()[cid] == (3, 2, "Acme Solar")  # one call finished, one still ringing
+
+
+def test_finished_call_logged_once_without_personal_data(client, bolna, payments, caplog):
+    import logging
+    signup(client)
+    top_up(client, payments)
+    cid = ready_campaign(client, b"name,phone\nAsha,9876543210\n")
+    client.post(f"/api/campaigns/{cid}/start")
+    client.worker.tick()
+    bolna.executions["exec-0"] = {"id": "exec-0", "status": "completed", "conversation_duration": 30,
+                                  "transcript": "assistant: Vanakkam Asha\nassistant: Kekkudha?\n",
+                                  "telephony_data": {"hangup_reason": "silence timeout"}}
+    with caplog.at_level(logging.INFO, logger="app.worker"):
+        client.worker.tick()
+        client.post("/api/webhooks/bolna", json={"id": "exec-0"})  # same call reported again
+    lines = [r.getMessage() for r in caplog.records if "call finished" in r.getMessage()]
+    assert len(lines) == 1
+    assert "agent_turns=2 customer_turns=0" in lines[0] and "hangup=silence timeout" in lines[0]
+    assert "Asha" not in lines[0] and "9876543210" not in lines[0]
+
+
+def test_language_switching_can_be_turned_off(settings):
+    import dataclasses
+    import httpx
+    from app.bolna import BolnaClient, load_voices
+    sent = []
+
+    def handler(request):
+        sent.append("multilingual" in json.loads(request.content)["agent_config"]["tasks"][0]["tools_config"]["transcriber"])
+        return httpx.Response(200, json={"agent_id": "a"})
+
+    for switching, expected in ((True, [True]), (False, [False])):
+        sent.clear()
+        client = BolnaClient(dataclasses.replace(settings, bolna_api_key="k", language_switching=switching))
+        client._http = httpx.Client(base_url="https://api.bolna.ai", transport=httpx.MockTransport(handler))
+        client.create_agent({"id": "abcdefgh1", "business_name": "A", "product_details": "p",
+                             "sales_instructions": "s", "language": "Tamil"}, None, load_voices(settings.voices_path)[1])
+        assert sent == expected

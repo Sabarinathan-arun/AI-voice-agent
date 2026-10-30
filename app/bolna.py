@@ -376,6 +376,8 @@ class BolnaClient:
         single-language agent; and if Bolna refuses the template's AI model, all of that again with FALLBACK_LLM.
         Other errors (auth, network, 5xx) are reported straight away."""
         attempts = [(True, False), (True, True), (False, False), (False, True)]
+        if not self.settings.language_switching:  # LANGUAGE_SWITCHING=false
+            attempts = [a for a in attempts if not a[0]]
         for llm_model in (None, FALLBACK_LLM):
             for multilingual, region in attempts:
                 payload = build_agent_payload(self.settings.bolna_agent_template, campaign, webhook_url, voice,
