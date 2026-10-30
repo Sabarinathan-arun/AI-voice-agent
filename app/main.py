@@ -20,7 +20,7 @@ from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator
 
 from .accounts import Accounts
-from .bolna import LANGUAGES, BolnaError, load_voices, make_bolna_client
+from .bolna import LANGUAGES, BolnaError, default_greeting, load_voices, make_bolna_client
 from .config import Settings, load_settings
 from .export import build_results_workbook
 from .db import Database
@@ -194,9 +194,11 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, auth
 
     @app.get("/api/voices")
     def list_voices():
-        """The AI agents customers can choose from, each with a sample they can play."""
+        """The AI agents customers can choose from: both speak every call language, and each has a default opening
+        line per language (used when the customer leaves it empty)."""
         return [{**{k: v.get(k, "") for k in ("id", "name", "gender", "description", "sample_url")},
-                 "languages": list(LANGUAGES)} for v in voices]  # both agents speak every call language
+                 "languages": list(LANGUAGES),
+                 "greetings": {language: default_greeting(language, v) for language in LANGUAGES}} for v in voices]
 
     # --- accounts ----------------------------------------------------------------
 

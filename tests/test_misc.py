@@ -47,7 +47,7 @@ def test_agent_payload_from_customer_details(settings):
         assert text in prompt
     campaign["welcome_message"] = ""
     assert build_agent_payload(settings.bolna_agent_template, campaign, None)["agent_config"][
-        "agent_welcome_message"] == "Hello {{customer_name}}, I'm calling from Acme. Do you have a minute?"
+        "agent_welcome_message"] == "नमस्ते {{customer_name}} जी, मैं Acme से बोल रहा हूँ। दो मिनट बात कर सकते हैं?"
 
 
 def test_call_user_data():
@@ -152,10 +152,9 @@ def test_each_language_gets_a_voice_and_transcriber_that_speak_it(settings):
             assert synth["provider"] == "sarvam" and synth["provider_config"] == {
                 "voice": speaker.title(), "voice_id": speaker, "model": "bulbul:v3", "speed": 1,
                 "language": code}
-            if language == "English":
-                assert transcriber["provider"] == "deepgram" and transcriber["language"] == "en"
-            else:
-                assert transcriber["provider"] == "sarvam" and transcriber["language"] == code
+            # Sarvam in every language (it knows Indian accents), not ending the turn at the first short pause.
+            assert transcriber["provider"] == "sarvam" and transcriber["language"] == code
+            assert transcriber["high_vad_sensitivity"] is False
             assert f"Start the call in {language}" in prompt and "switch_language" in prompt
             assert "never in English letters" in prompt and "Tamil script" in prompt
             # Every language is ready, so the call can follow the customer; it starts in the campaign's language.
@@ -163,8 +162,7 @@ def test_each_language_gets_a_voice_and_transcriber_that_speak_it(settings):
             assert set(transcriber["multilingual"]) == set(synth["multilingual"]) == set(LANGUAGES.values())
             for name, leg_code in LANGUAGES.items():
                 leg = transcriber["multilingual"][leg_code]
-                assert (leg["provider"], leg["language"]) == (("deepgram", "en") if name == "English"
-                                                              else ("sarvam", leg_code))
+                assert (leg["provider"], leg["language"]) == ("sarvam", leg_code)
                 assert "multilingual" not in leg and leg["sampling_rate"] == transcriber["sampling_rate"]
                 voice_leg = synth["multilingual"][leg_code]
                 assert voice_leg["provider"] == "sarvam" and voice_leg["provider_config"]["voice_id"] == speaker
@@ -247,3 +245,31 @@ def test_sales_script_shows_colloquial_examples_in_native_script(settings):
     template = json.load(open(settings.bolna_agent_template))
     llm = template["agent_config"]["tasks"][0]["tools_config"]["llm_agent"]["llm_config"]
     assert llm["model"] == "gpt-4.1"
+
+
+def test_opening_line_and_check_in_are_in_the_call_language(settings):
+    from app.bolna import STILL_THERE, build_welcome_message, load_voices
+    arjun, kavya = load_voices(settings.voices_path)
+    base = {"id": "abcdefgh123", "business_name": "Sunrise Solar", "product_details": "p", "sales_instructions": "s"}
+    tamil = build_welcome_message({**base, "language": "Tamil"}, kavya)
+    assert tamil.startswith("வணக்கம் {{customer_name}}") and "Kavya பேசுறேன்" in tamil and "Sunrise Solar" in tamil
+    assert "बोल रही हूँ" in build_welcome_message({**base, "language": "Hindi"}, kavya)   # she
+    assert "बोल रहा हूँ" in build_welcome_message({**base, "language": "Hindi"}, arjun)   # he
+    assert "बोलतेय" in build_welcome_message({**base, "language": "Marathi"}, kavya)
+    assert build_welcome_message({**base, "language": "English"}, arjun) == (
+        "Hi {{customer_name}}, this is Arjun from Sunrise Solar. Got two minutes?")
+    # No agent name: no placeholder or repeated business name.
+    hindi = build_welcome_message({**base, "language": "Hindi"})
+    assert "{agent}" not in hindi and hindi.count("Sunrise Solar") == 1
+    # The customer's own opening line is used as written.
+    assert build_welcome_message({**base, "language": "Tamil", "welcome_message": "Hi {name}"}, kavya) == "Hi {{name}}"
+
+    payload = build_agent_payload(settings.bolna_agent_template, {**base, "language": "Tamil"}, None, kavya)
+    task = payload["agent_config"]["tasks"][0]
+    assert task["task_config"]["check_user_online_message"] == STILL_THERE  # per language, follows a switch
+    assert task["task_config"]["voicemail"] is False and task["task_config"]["backchanneling"] is False
+    assert task["task_config"]["hangup_after_silence"] >= 20 and task["task_config"]["call_terminate"] >= 600
+    assert task["tools_config"]["transcriber"]["endpointing"] >= 500
+    single = build_agent_payload(settings.bolna_agent_template, {**base, "language": "Tamil"}, None, kavya,
+                                 multilingual=False)
+    assert single["agent_config"]["tasks"][0]["task_config"]["check_user_online_message"] == "ஹலோ, கேக்குதா?"

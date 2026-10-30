@@ -39,9 +39,29 @@ SCRIPTS = {
     "Kannada": "Kannada script (ಕನ್ನಡ)", "Malayalam": "Malayalam script (മലയാളം)",
     "Marathi": "Devanagari (मराठी)", "Bengali": "Bengali script (বাংলা)", "Gujarati": "Gujarati script (ગુજરાતી)",
 }
-# Speech recognition for Indian languages: Sarvam saaras:v3 understands all of them (and Indian English mixed in);
-# English calls keep the template's transcriber (Deepgram).
-INDIAN_TRANSCRIBER = {"provider": "sarvam", "model": "saaras:v3"}
+# Speech recognition: Sarvam saaras:v3 understands every call language, Indian-accented English included.
+# high_vad_sensitivity off: don't end the customer's turn at the first short pause.
+INDIAN_TRANSCRIBER = {"provider": "sarvam", "model": "saaras:v3", "high_vad_sensitivity": False}
+
+# Opening line when the customer leaves it empty, in each language's everyday spoken form.
+# {agent} is the AI agent's name; Hindi needs the speaker's gender for the verb.
+DEFAULT_GREETINGS = {
+    "English": "Hi {customer_name}, this is {agent} from {business_name}. Got two minutes?",
+    "Hindi": "नमस्ते {customer_name} जी, मैं {business_name} से {agent} बोल {rahi} हूँ। दो मिनट बात कर सकते हैं?",
+    "Tamil": "வணக்கம் {customer_name}, நான் {business_name}-ல இருந்து {agent} பேசுறேன். ஒரு ரெண்டு நிமிஷம் பேசலாமா?",
+    "Telugu": "నమస్తే {customer_name} గారు, నేను {business_name} నుంచి {agent} మాట్లాడుతున్నాను. ఒక రెండు నిమిషాలు మాట్లాడొచ్చా?",
+    "Kannada": "ನಮಸ್ಕಾರ {customer_name}, ನಾನು {business_name} ಇಂದ {agent} ಮಾತಾಡ್ತಿದೀನಿ. ಒಂದು ಎರಡು ನಿಮಿಷ ಮಾತಾಡಬಹುದಾ?",
+    "Malayalam": "ഹലോ {customer_name}, ഞാൻ {business_name}-ൽ നിന്ന് {agent} ആണ് വിളിക്കുന്നത്. ഒരു രണ്ട് മിനിറ്റ് സംസാരിക്കാമോ?",
+    "Marathi": "नमस्कार {customer_name}, मी {business_name} मधून {agent} बोलतोय. दोन मिनिटं बोलायला वेळ आहे का?",
+    "Bengali": "নমস্কার {customer_name}, আমি {business_name} থেকে {agent} বলছি। দু মিনিট কথা বলা যাবে?",
+    "Gujarati": "નમસ્તે {customer_name}, હું {business_name} માંથી {agent} બોલું છું. બે મિનિટ વાત કરી શકીએ?",
+}
+# Said when the customer goes quiet, in the language the call is in at that moment.
+STILL_THERE = {
+    "en": "Hello, can you hear me?", "hi": "हेलो, आवाज़ आ रही है?", "ta": "ஹலோ, கேக்குதா?",
+    "te": "హలో, వినిపిస్తుందా?", "kn": "ಹಲೋ, ಕೇಳಿಸ್ತಿದೆಯಾ?", "ml": "ഹലോ, കേൾക്കുന്നുണ്ടോ?",
+    "mr": "हॅलो, ऐकू येतंय का?", "bn": "হ্যালো, শুনতে পাচ্ছেন?", "gu": "હેલો, સંભળાય છે?",
+}
 # Used if the Bolna account doesn't offer the template's AI model (gpt-4.1).
 FALLBACK_LLM = "gpt-4o-mini"
 
@@ -231,23 +251,36 @@ Start the call in {language}.
 """
 
 
-def build_welcome_message(campaign: dict) -> str:
-    text = (campaign.get("welcome_message") or "").strip() or (
-        "Hello {customer_name}, I'm calling from {business_name}. Do you have a minute?"
-    )
+def default_greeting(language: str, voice: dict | None = None) -> str:
+    """The opening line in the call language, introducing the agent by name."""
+    female = (voice or {}).get("gender") == "Female"
+    text = DEFAULT_GREETINGS.get(language, DEFAULT_GREETINGS["English"])
+    text = text.replace("{rahi}", "रही" if female else "रहा")
+    if language == "Marathi" and female:
+        text = text.replace("बोलतोय", "बोलतेय")
+    agent = (voice or {}).get("name")
+    if agent:
+        return text.replace("{agent}", agent)
+    # No agent name: "I'm calling from <business>" (the sentences read correctly without the name).
+    if language == "English" or language not in DEFAULT_GREETINGS:
+        return "Hi {customer_name}, I'm calling from {business_name}. Got two minutes?"
+    return text.replace("{agent} ", "")
+
+
+def build_welcome_message(campaign: dict, voice: dict | None = None) -> str:
+    text = (campaign.get("welcome_message") or "").strip() or default_greeting(
+        campaign.get("language") or "English", voice)
     text = SINGLE_BRACE_VAR.sub(r"{{\1}}", text)  # customers type {name}; Bolna needs {{name}}
     return text.replace("{{business_name}}", campaign["business_name"])
 
 
 def transcriber_for(base: dict, language: str, region: bool = False) -> dict:
-    """Speech recognition for one language: the template's (Deepgram) for English, Sarvam for Indian languages."""
+    """Speech recognition for one language (Sarvam, which knows Indian accents), keeping the template's audio
+    settings."""
     config = dict(base)
     config.pop("multilingual", None)
     config.pop("active", None)
-    if language == "English":
-        config["language"] = language_code(language)
-    else:
-        config.update(INDIAN_TRANSCRIBER, language=language_code(language, region))
+    config.update(INDIAN_TRANSCRIBER, language=language_code(language, region))
     return config
 
 
@@ -260,12 +293,14 @@ def build_agent_payload(template_path: str, campaign: dict, webhook_url: str | N
         payload = copy.deepcopy(json.load(f))
     cfg = payload.setdefault("agent_config", {})
     cfg["agent_name"] = f"{campaign['business_name']} sales ({campaign['id'][:8]})"[:100]
-    cfg["agent_welcome_message"] = build_welcome_message(campaign)
+    cfg["agent_welcome_message"] = build_welcome_message(campaign, voice)
     cfg["webhook_url"] = webhook_url
     cfg.setdefault("call_summary_enabled", True)  # Bolna returns a summary only when this is on
     language = campaign.get("language") or "English"
     for task in cfg.get("tasks", []):
         tools = task.get("tools_config", {})
+        task.setdefault("task_config", {})["check_user_online_message"] = (
+            dict(STILL_THERE) if multilingual else STILL_THERE[LANGUAGES.get(language, "en")])
         llm_config = tools.get("llm_agent", {}).get("llm_config")
         if llm_config is not None:  # Bolna reads summary and extraction settings from the LLM config
             llm_config.setdefault("summarization_details", "Summarise the sales call in 2-3 short sentences, in English.")
@@ -347,7 +382,11 @@ class BolnaClient:
                 model = llm_model or llm_config["model"]
                 llm_config["model"] = model
                 try:
-                    return self._request("POST", "/v2/agent", json=payload)
+                    data = self._request("POST", "/v2/agent", json=payload)
+                    log.info("Bolna agent created: model=%s, language switching=%s, language codes=%s",
+                             model, "on" if multilingual else "OFF (not accepted by Bolna)",
+                             "region (ta-IN)" if region else "plain (ta)")
+                    return data
                 except BolnaError as exc:
                     if " 400: " not in str(exc):
                         raise

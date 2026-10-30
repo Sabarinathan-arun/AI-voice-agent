@@ -84,8 +84,11 @@
         </div>
         <div class="full">
           <label for="welcome_message">Opening line <span class="opt">(optional)</span></label>
-          <input type="text" id="welcome_message" maxlength="500" placeholder="Hello {customer_name}, this is Arjun from {business_name}…">
-          <p class="hint">Use {customer_name} and {business_name} — they're filled in on every call.</p>
+          <input type="text" id="welcome_message" maxlength="500" placeholder="Hi {customer_name}, this is Arjun from {business_name}. Got two minutes?">
+          <p class="hint">Spoken exactly as written, in the call language. Leave empty to use the greeting shown, which
+            follows the language and agent you pick. Use {customer_name} and {business_name}; they're filled in on every call.</p>
+          <p class="hint warn-text" id="welcome-warn" hidden>This opening line is in English letters, but the call language is
+            <b id="welcome-lang"></b>, so the call would start in English. Clear it to use the greeting shown, or write it in that language.</p>
         </div>
         <div class="full">
           <label>Choose your AI agent</label>
@@ -165,6 +168,7 @@ const FIELDS = ['business_name', 'business_description', 'product_details', 'sal
 let timer = null, formFilled = false;
 
 function renderVoices(voices) {
+  voiceList = voices;
   $('voices').innerHTML = voices.map((v, i) => `<label class="voice">
       <input type="radio" name="voice" value="${esc(v.id)}" ${i === 0 ? 'checked' : ''}>
       <span class="voice-top">
@@ -178,9 +182,16 @@ function renderVoices(voices) {
   updatePlaceholder();
 }
 function selectedVoice() { return (document.querySelector('input[name=voice]:checked') || {}).value || ''; }
+let voiceList = [];
 function updatePlaceholder() {
-  const label = document.querySelector('input[name=voice]:checked')?.closest('label')?.querySelector('b')?.textContent;
-  if (label) $('welcome_message').placeholder = `Hello {customer_name}, this is ${label} from {business_name}…`;
+  const voice = voiceList.find(v => v.id === selectedVoice()) || voiceList[0];
+  const language = $('language').value || 'English';
+  if (voice && voice.greetings) $('welcome_message').placeholder = voice.greetings[language] || voice.greetings.English;
+  // A line typed in English letters is spoken as written, so a Tamil call would open in English.
+  const text = $('welcome_message').value.replace(/\{[^}]*\}/g, '').trim();
+  const english = text && language !== 'English' && /^[\x00-\x7F]*$/.test(text);
+  $('welcome-warn').hidden = !english;
+  $('welcome-lang').textContent = language;
 }
 
 async function load() {
@@ -219,7 +230,8 @@ function render({campaign: c, stats, leads, balance_paise}) {
     $('prefilled').hidden = !(c.prefilled && c.status === 'setup');
     for (const k of FIELDS) if (c[k]) $(k).value = c[k];
     const v = c.voice && document.querySelector(`input[name=voice][value="${CSS.escape(c.voice)}"]`);
-    if (v) { v.checked = true; updatePlaceholder(); }
+    if (v) v.checked = true;
+    updatePlaceholder();  // greeting for the saved language/agent, and the warning for an English opening line
     formFilled = true;
   }
   const ready = c.business_name && c.product_details && c.sales_instructions && stats.total > 0;
@@ -316,6 +328,8 @@ $('stop').onclick = async () => {
   try {
     const cfg = await getConfig();
     $('language').innerHTML = cfg.languages.map(l => `<option>${esc(l)}</option>`).join('');
+    $('language').addEventListener('change', updatePlaceholder);
+    $('welcome_message').addEventListener('input', updatePlaceholder);
     $('rate').textContent = rupees(cfg.price_per_minute_paise).replace(/\.00$/, '');
     $('lowlimit').textContent = rupees(cfg.low_balance_paise).replace(/\.00$/, '');
     renderVoices(await voicesRequest);
