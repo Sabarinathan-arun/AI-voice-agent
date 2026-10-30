@@ -39,7 +39,7 @@ def test_agent_payload_from_customer_details(settings):
     assert cfg["agent_welcome_message"] == "Hi {{customer_name}}, Acme here"
     assert cfg["webhook_url"] == "https://x/hook" and cfg["call_summary_enabled"] is True
     transcriber = cfg["tasks"][0]["tools_config"]["transcriber"]
-    assert (transcriber["provider"], transcriber["model"], transcriber["language"]) == ("sarvam", "saarika:v2.5", "hi-IN")
+    assert (transcriber["provider"], transcriber["model"], transcriber["language"]) == ("sarvam", "saaras:v3", "hi-IN")
     prompt = payload["agent_prompts"]["task_1"]["system_prompt"]
     assert "Your name is Kajal" in prompt and "Sounding natural in Hindi" in prompt
     for text in ("Acme", "Solar since 2015", "3kW system", "Book a visit", "Speak in Hindi",
@@ -146,11 +146,11 @@ def test_each_language_gets_a_voice_and_transcriber_that_speak_it(settings):
         return t["synthesizer"], t["transcriber"], payload["agent_prompts"]["task_1"]["system_prompt"]
 
     # One male and one female Sarvam voice, each speaking every call language; the customer's choice decides.
-    for voice_id, speaker in (("arjun", "abhilash"), ("kavya", "anushka")):
+    for voice_id, speaker in (("arjun", "shubh"), ("kavya", "kavya")):
         for language, code in LANGUAGES.items():
             synth, transcriber, prompt = tools(language, voice_id)
             assert synth["provider"] == "sarvam" and synth["provider_config"] == {
-                "voice": speaker.title(), "voice_id": speaker, "model": "bulbul:v2", "speed": 1,
+                "voice": speaker.title(), "voice_id": speaker, "model": "bulbul:v3", "speed": 1,
                 "language": f"{code}-IN"}
             if language == "English":
                 assert transcriber["provider"] == "deepgram" and transcriber["language"] == "en"

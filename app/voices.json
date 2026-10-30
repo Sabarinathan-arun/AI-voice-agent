@@ -6,9 +6,9 @@
     "description": "Warm, confident and friendly",
     "provider": "sarvam",
     "provider_config": {
-      "voice": "Abhilash",
-      "voice_id": "abhilash",
-      "model": "bulbul:v2",
+      "voice": "Shubh",
+      "voice_id": "shubh",
+      "model": "bulbul:v3",
       "speed": 1
     },
     "sample_url": ""
@@ -20,9 +20,9 @@
     "description": "Friendly, calm and clear",
     "provider": "sarvam",
     "provider_config": {
-      "voice": "Anushka",
-      "voice_id": "anushka",
-      "model": "bulbul:v2",
+      "voice": "Kavya",
+      "voice_id": "kavya",
+      "model": "bulbul:v3",
       "speed": 1
     },
     "sample_url": ""

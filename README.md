@@ -74,21 +74,22 @@ Restore: `gpg -d intuvora-DATE.sql.gz.gpg | gunzip | psql "$DATABASE_URL"`.
 ### AI agents
 
 Customers choose between two agents in `app/voices.json`; the campaign's calls use the chosen one. Same settings
-and sales script, different voice. Both are Sarvam `bulbul:v2` voices, which speak all nine call languages
+and sales script, different voice. Both are Sarvam `bulbul:v3` voices, which speak all nine call languages
 (English, Hindi, Tamil, Telugu, Kannada, Malayalam, Marathi, Bengali, Gujarati) natively:
 
 | Agent | Voice |
 |---|---|
-| **Arjun** (male) | Sarvam Abhilash (`abhilash`) |
-| **Kavya** (female) | Sarvam Anushka (`anushka`) |
+| **Arjun** (male) | Sarvam Shubh (`shubh`) |
+| **Kavya** (female) | Sarvam Kavya (`kavya`) |
 
-- Speech recognition: English calls use Deepgram (template); every other language uses Sarvam `saarika:v2.5`
+- Speech recognition: English calls use Deepgram (template); every other language uses Sarvam `saaras:v3`
   with the language set (`ta-IN`, `te-IN`, …), so the agent understands the customer.
 - The AI writes replies in the language's own script (e.g. Tamil script, not Tamil in English letters) so the
   voice pronounces them properly; everyday English words stay in English.
 - `name` is what customers see and how the agent introduces itself on calls.
 - `sample_url`: a link to a short sample of the voice, to show a play button.
-- Other Sarvam voices: female `manisha`, `vidya`, `arya`; male `karun`, `hitesh` (change `voice` and `voice_id`).
+- Other `bulbul:v3` voices: female `ritu`, `priya`, `neha`, `pooja`, `simran`, `ishita`, `shreya`; male `aditya`,
+  `rahul`, `rohan`, `amit`, `dev`, `varun` (change `voice` and `voice_id`). `bulbul:v2` voices no longer work.
 
 ### Outcomes
 

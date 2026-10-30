@@ -36,9 +36,9 @@ SCRIPTS = {
     "Kannada": "Kannada script (ಕನ್ನಡ)", "Malayalam": "Malayalam script (മലയാളം)",
     "Marathi": "Devanagari (मराठी)", "Bengali": "Bengali script (বাংলা)", "Gujarati": "Gujarati script (ગુજરાતી)",
 }
-# Speech recognition for Indian languages: Sarvam understands all of them (and Indian English mixed in);
+# Speech recognition for Indian languages: Sarvam saaras:v3 understands all of them (and Indian English mixed in);
 # English calls keep the template's transcriber (Deepgram).
-INDIAN_TRANSCRIBER = {"provider": "sarvam", "model": "saarika:v2.5"}
+INDIAN_TRANSCRIBER = {"provider": "sarvam", "model": "saaras:v3"}
 
 EXTRACTION_PROMPT = (
     "outcome : interested or not_interested. interested = the customer showed interest, asked for details, "
