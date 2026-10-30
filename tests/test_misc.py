@@ -145,19 +145,17 @@ def test_each_language_gets_a_voice_and_transcriber_that_speak_it(settings):
         t = payload["agent_config"]["tasks"][0]["tools_config"]
         return t["synthesizer"], t["transcriber"], payload["agent_prompts"]["task_1"]["system_prompt"]
 
-    # Arjun keeps the ElevenLabs voice in English and Hindi; every other language uses Sarvam, which speaks it.
-    synth, transcriber, _ = tools("English", "arjun")
-    assert synth["provider_config"]["voice"] == "Viraj" and transcriber["provider"] == "deepgram"
-    assert tools("Hindi", "arjun")[0]["provider_config"]["voice"] == "Viraj"
-    for language, code in LANGUAGES.items():
-        if language not in ("English", "Hindi"):
-            synth, transcriber, prompt = tools(language, "arjun")
-            assert synth["provider"] == "sarvam" and synth["provider_config"]["language"] == f"{code}-IN"
-            assert transcriber["provider"] == "sarvam" and transcriber["language"] == f"{code}-IN"
-            assert "never in English letters" in prompt
-    # Kavya uses Sarvam's female voice in every language.
-    for language, code in LANGUAGES.items():
-        synth, _, _ = tools(language, "kavya")
-        assert synth["provider"] == "sarvam" and synth["provider_config"] == {
-            "voice": "Anushka", "voice_id": "anushka", "model": "bulbul:v2", "speed": 1, "language": f"{code}-IN"}
-    assert "Tamil script" in tools("Tamil", "kavya")[2] and "English letters" not in tools("English", "kavya")[2]
+    # One male and one female Sarvam voice, each speaking every call language; the customer's choice decides.
+    for voice_id, speaker in (("arjun", "abhilash"), ("kavya", "anushka")):
+        for language, code in LANGUAGES.items():
+            synth, transcriber, prompt = tools(language, voice_id)
+            assert synth["provider"] == "sarvam" and synth["provider_config"] == {
+                "voice": speaker.title(), "voice_id": speaker, "model": "bulbul:v2", "speed": 1,
+                "language": f"{code}-IN"}
+            if language == "English":
+                assert transcriber["provider"] == "deepgram" and transcriber["language"] == "en"
+                assert "English letters" not in prompt
+            else:
+                assert transcriber["provider"] == "sarvam" and transcriber["language"] == f"{code}-IN"
+                assert "never in English letters" in prompt
+    assert "Tamil script" in tools("Tamil", "kavya")[2]

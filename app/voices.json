@@ -3,39 +3,13 @@
     "id": "arjun",
     "name": "Arjun",
     "gender": "Male",
-    "description": "Warm, energetic and lively",
+    "description": "Warm, confident and friendly",
     "provider": "sarvam",
     "provider_config": {
       "voice": "Abhilash",
       "voice_id": "abhilash",
       "model": "bulbul:v2",
       "speed": 1
-    },
-    "by_language": {
-      "English": {
-        "provider": "elevenlabs",
-        "provider_config": {
-          "voice": "Viraj",
-          "voice_id": "iWNf11sz1GrUE4ppxTOL",
-          "model": "eleven_turbo_v2_5",
-          "temperature": 0.45,
-          "similarity_boost": 0.8,
-          "speed": 1,
-          "style": 0
-        }
-      },
-      "Hindi": {
-        "provider": "elevenlabs",
-        "provider_config": {
-          "voice": "Viraj",
-          "voice_id": "iWNf11sz1GrUE4ppxTOL",
-          "model": "eleven_turbo_v2_5",
-          "temperature": 0.45,
-          "similarity_boost": 0.8,
-          "speed": 1,
-          "style": 0
-        }
-      }
     },
     "sample_url": ""
   },

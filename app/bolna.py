@@ -85,13 +85,12 @@ def load_voices(path: str) -> list[dict]:
 
 
 def voice_for_language(voice: dict, language: str) -> tuple[str, dict]:
-    """The synthesizer (provider, provider_config) an agent uses in a language: its "by_language" entry if it has
-    one (e.g. a voice that is best in English and Hindi), else its default voice."""
-    chosen = (voice.get("by_language") or {}).get(language) or voice
-    config = copy.deepcopy(chosen["provider_config"])
+    """The synthesizer (provider, provider_config) for the chosen agent, set to speak the campaign's language.
+    Sarvam takes region codes ("ta-IN"); other providers the bare code."""
+    config = copy.deepcopy(voice["provider_config"])
     code = LANGUAGES.get(language, "en")
-    config.setdefault("language", f"{code}-IN" if chosen["provider"] == "sarvam" else code)
-    return chosen["provider"], config
+    config.setdefault("language", f"{code}-IN" if voice["provider"] == "sarvam" else code)
+    return voice["provider"], config
 
 
 def build_system_prompt(campaign: dict, agent_name: str = "") -> str:

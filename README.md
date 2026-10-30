@@ -73,23 +73,22 @@ Restore: `gpg -d intuvora-DATE.sql.gz.gpg | gunzip | psql "$DATABASE_URL"`.
 
 ### AI agents
 
-Customers choose between the agents in `app/voices.json`. Same settings and sales script, different voice:
+Customers choose between two agents in `app/voices.json`; the campaign's calls use the chosen one. Same settings
+and sales script, different voice. Both are Sarvam `bulbul:v2` voices, which speak all nine call languages
+(English, Hindi, Tamil, Telugu, Kannada, Malayalam, Marathi, Bengali, Gujarati) natively:
 
-| Agent | English and Hindi | Tamil, Telugu, Kannada, Malayalam, Marathi, Bengali, Gujarati |
-|---|---|---|
-| **Arjun** (male) | ElevenLabs Viraj (`iWNf11sz1GrUE4ppxTOL`) | Sarvam Abhilash (`bulbul:v2`) |
-| **Kavya** (female) | Sarvam Anushka (`bulbul:v2`) | Sarvam Anushka (`bulbul:v2`) |
+| Agent | Voice |
+|---|---|
+| **Arjun** (male) | Sarvam Abhilash (`abhilash`) |
+| **Kavya** (female) | Sarvam Anushka (`anushka`) |
 
-- Each agent has a default voice (`provider`, `provider_config`) and optional `by_language` voices for
-  languages where another voice sounds better. Sarvam speaks all nine languages natively; ElevenLabs only
-  covers English and Hindi well.
 - Speech recognition: English calls use Deepgram (template); every other language uses Sarvam `saarika:v2.5`
   with the language set (`ta-IN`, `te-IN`, …), so the agent understands the customer.
 - The AI writes replies in the language's own script (e.g. Tamil script, not Tamil in English letters) so the
   voice pronounces them properly; everyday English words stay in English.
 - `name` is what customers see and how the agent introduces itself on calls.
 - `sample_url`: a link to a short sample of the voice, to show a play button.
-- Other Sarvam female voices: `manisha`, `vidya`, `arya`; male: `abhilash`, `karun`, `hitesh`.
+- Other Sarvam voices: female `manisha`, `vidya`, `arya`; male `karun`, `hitesh` (change `voice` and `voice_id`).
 
 ### Outcomes
 

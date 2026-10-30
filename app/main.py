@@ -195,7 +195,8 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, auth
     @app.get("/api/voices")
     def list_voices():
         """The AI agents customers can choose from, each with a sample they can play."""
-        return [{k: v.get(k, "") for k in ("id", "name", "gender", "description", "sample_url")} for v in voices]
+        return [{**{k: v.get(k, "") for k in ("id", "name", "gender", "description", "sample_url")},
+                 "languages": list(LANGUAGES)} for v in voices]  # both agents speak every call language
 
     # --- accounts ----------------------------------------------------------------
 

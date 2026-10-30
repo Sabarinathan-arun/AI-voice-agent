@@ -84,7 +84,7 @@
         </div>
         <div class="full">
           <label for="welcome_message">Opening line <span class="opt">(optional)</span></label>
-          <input type="text" id="welcome_message" maxlength="500" placeholder="Hello {customer_name}, this is Viraj from {business_name}…">
+          <input type="text" id="welcome_message" maxlength="500" placeholder="Hello {customer_name}, this is Arjun from {business_name}…">
           <p class="hint">Use {customer_name} and {business_name} — they're filled in on every call.</p>
         </div>
         <div class="full">
@@ -171,6 +171,7 @@ function renderVoices(voices) {
         <span class="voice-avatar ${v.gender === 'Female' ? 'f' : 'm'}" aria-hidden="true">${esc((v.name || '?')[0])}</span>
         <span><b>${esc(v.name)}</b><span class="voice-meta">${esc(v.gender || '')}${v.description ? ' · ' + esc(v.description) : ''}</span></span>
       </span>
+      ${(v.languages || []).length ? `<span class="voice-langs">Speaks ${esc(v.languages.join(', '))}</span>` : ''}
       ${v.sample_url ? `<audio controls preload="none" src="${esc(v.sample_url)}"></audio>` : ''}
     </label>`).join('');
   document.querySelectorAll('input[name=voice]').forEach(r => r.onchange = updatePlaceholder);
