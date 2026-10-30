@@ -25,11 +25,20 @@ TERMINAL_STATUSES = {
     "stopped", "error", "balance-low", "call-disconnected-failed",
 }
 
-# Call languages offered on the setup form -> language code for Bolna's transcriber.
+# Call languages offered on the setup form -> language code.
 LANGUAGES = {
     "English": "en", "Hindi": "hi", "Tamil": "ta", "Telugu": "te", "Kannada": "kn",
     "Malayalam": "ml", "Marathi": "mr", "Bengali": "bn", "Gujarati": "gu",
 }
+# The language's own script: the AI writes in it so the voice pronounces words properly.
+SCRIPTS = {
+    "Hindi": "Devanagari (हिंदी)", "Tamil": "Tamil script (தமிழ்)", "Telugu": "Telugu script (తెలుగు)",
+    "Kannada": "Kannada script (ಕನ್ನಡ)", "Malayalam": "Malayalam script (മലയാളം)",
+    "Marathi": "Devanagari (मराठी)", "Bengali": "Bengali script (বাংলা)", "Gujarati": "Gujarati script (ગુજરાતી)",
+}
+# Speech recognition for Indian languages: Sarvam understands all of them (and Indian English mixed in);
+# English calls keep the template's transcriber (Deepgram).
+INDIAN_TRANSCRIBER = {"provider": "sarvam", "model": "saarika:v2.5"}
 
 EXTRACTION_PROMPT = (
     "outcome : interested or not_interested. interested = the customer showed interest, asked for details, "
@@ -75,6 +84,16 @@ def load_voices(path: str) -> list[dict]:
     return [v for v in voices if v.get("id") and v.get("provider") and v.get("provider_config")]
 
 
+def voice_for_language(voice: dict, language: str) -> tuple[str, dict]:
+    """The synthesizer (provider, provider_config) an agent uses in a language: its "by_language" entry if it has
+    one (e.g. a voice that is best in English and Hindi), else its default voice."""
+    chosen = (voice.get("by_language") or {}).get(language) or voice
+    config = copy.deepcopy(chosen["provider_config"])
+    code = LANGUAGES.get(language, "en")
+    config.setdefault("language", f"{code}-IN" if chosen["provider"] == "sarvam" else code)
+    return chosen["provider"], config
+
+
 def build_system_prompt(campaign: dict, agent_name: str = "") -> str:
     """The agent's sales script. {{customer_name}} and {{customer_details}} are filled by Bolna on each call."""
     language = campaign.get("language") or "English"
@@ -82,6 +101,7 @@ def build_system_prompt(campaign: dict, agent_name: str = "") -> str:
     return f"""You are a real-sounding sales caller for {business}, on a phone call with {{{{customer_name}}}}.
 Speak in {language}. If the customer clearly prefers another language, or mixes languages (for example
 Hinglish or Tanglish), follow how they talk.
+{f"Write every reply in {SCRIPTS[language]}, never in English letters, so it is pronounced correctly; keep common English words (offer, price, booking) in English letters." if language in SCRIPTS else ""}
 
 ## How to sound human on the phone
 - Talk the way people actually talk on a call: short, simple sentences, one idea at a time. Usually one or two
@@ -146,7 +166,8 @@ def build_agent_payload(template_path: str, campaign: dict, webhook_url: str | N
     cfg["agent_welcome_message"] = build_welcome_message(campaign)
     cfg["webhook_url"] = webhook_url
     cfg.setdefault("call_summary_enabled", True)  # Bolna returns a summary only when this is on
-    code = LANGUAGES.get(campaign.get("language") or "English", "en")
+    language = campaign.get("language") or "English"
+    code = LANGUAGES.get(language, "en")
     for task in cfg.get("tasks", []):
         tools = task.get("tools_config", {})
         llm_config = tools.get("llm_agent", {}).get("llm_config")
@@ -154,10 +175,12 @@ def build_agent_payload(template_path: str, campaign: dict, webhook_url: str | N
             llm_config.setdefault("summarization_details", "Summarise the sales call in 2-3 short sentences, in English.")
             llm_config.setdefault("extraction_details", EXTRACTION_PROMPT)
         if tools.get("transcriber") is not None:
-            tools["transcriber"]["language"] = code
+            if language == "English":
+                tools["transcriber"]["language"] = code
+            else:
+                tools["transcriber"].update(INDIAN_TRANSCRIBER, language=f"{code}-IN")
         if voice and tools.get("synthesizer") is not None:
-            tools["synthesizer"]["provider"] = voice["provider"]
-            tools["synthesizer"]["provider_config"] = copy.deepcopy(voice["provider_config"])
+            tools["synthesizer"]["provider"], tools["synthesizer"]["provider_config"] = voice_for_language(voice, language)
     payload.setdefault("agent_prompts", {}).setdefault("task_1", {})["system_prompt"] = build_system_prompt(
         campaign, (voice or {}).get("name", ""))
     return payload

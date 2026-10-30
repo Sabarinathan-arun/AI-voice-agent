@@ -34,10 +34,12 @@ def test_agent_payload_from_customer_details(settings):
     assert llm["summarization_details"] and llm["request_json"] is False
     assert "extraction_details" not in cfg  # Bolna reads it from llm_config
     synth = cfg["tasks"][0]["tools_config"]["synthesizer"]
-    assert synth["provider"] == "polly" and synth["provider_config"] == {"voice": "Kajal", "engine": "neural"}
+    assert synth["provider"] == "polly" and synth["provider_config"] == {"voice": "Kajal", "engine": "neural",
+                                                                        "language": "hi"}
     assert cfg["agent_welcome_message"] == "Hi {{customer_name}}, Acme here"
     assert cfg["webhook_url"] == "https://x/hook" and cfg["call_summary_enabled"] is True
-    assert cfg["tasks"][0]["tools_config"]["transcriber"]["language"] == "hi"
+    transcriber = cfg["tasks"][0]["tools_config"]["transcriber"]
+    assert (transcriber["provider"], transcriber["model"], transcriber["language"]) == ("sarvam", "saarika:v2.5", "hi-IN")
     prompt = payload["agent_prompts"]["task_1"]["system_prompt"]
     assert "Your name is Kajal" in prompt and "Sounding natural in Hindi" in prompt
     for text in ("Acme", "Solar since 2015", "3kW system", "Book a visit", "Speak in Hindi",
@@ -130,3 +132,32 @@ def test_accounts_db_from_previous_version_upgrades(tmp_path):
     new = accounts.user_for_identity("a-2", "new@gmail.com", "New")
     assert new["email"] == "new@gmail.com" and new["balance_paise"] == 0
     assert accounts.user_for_identity("a-2", "new@gmail.com", "New")["id"] == new["id"]
+
+
+def test_each_language_gets_a_voice_and_transcriber_that_speak_it(settings):
+    from app.bolna import LANGUAGES, load_voices
+    voices = {v["id"]: v for v in load_voices(settings.voices_path)}
+    base = {"id": "abcdefgh123", "business_name": "Acme", "product_details": "p", "sales_instructions": "s"}
+
+    def tools(language, voice_id):
+        payload = build_agent_payload(settings.bolna_agent_template, {**base, "language": language},
+                                      None, voices[voice_id])
+        t = payload["agent_config"]["tasks"][0]["tools_config"]
+        return t["synthesizer"], t["transcriber"], payload["agent_prompts"]["task_1"]["system_prompt"]
+
+    # Arjun keeps the ElevenLabs voice in English and Hindi; every other language uses Sarvam, which speaks it.
+    synth, transcriber, _ = tools("English", "arjun")
+    assert synth["provider_config"]["voice"] == "Viraj" and transcriber["provider"] == "deepgram"
+    assert tools("Hindi", "arjun")[0]["provider_config"]["voice"] == "Viraj"
+    for language, code in LANGUAGES.items():
+        if language not in ("English", "Hindi"):
+            synth, transcriber, prompt = tools(language, "arjun")
+            assert synth["provider"] == "sarvam" and synth["provider_config"]["language"] == f"{code}-IN"
+            assert transcriber["provider"] == "sarvam" and transcriber["language"] == f"{code}-IN"
+            assert "never in English letters" in prompt
+    # Kavya uses Sarvam's female voice in every language.
+    for language, code in LANGUAGES.items():
+        synth, _, _ = tools(language, "kavya")
+        assert synth["provider"] == "sarvam" and synth["provider_config"] == {
+            "voice": "Anushka", "voice_id": "anushka", "model": "bulbul:v2", "speed": 1, "language": f"{code}-IN"}
+    assert "Tamil script" in tools("Tamil", "kavya")[2] and "English letters" not in tools("English", "kavya")[2]

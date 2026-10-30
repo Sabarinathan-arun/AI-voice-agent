@@ -73,17 +73,23 @@ Restore: `gpg -d intuvora-DATE.sql.gz.gpg | gunzip | psql "$DATABASE_URL"`.
 
 ### AI agents
 
-Customers choose between the agents in `app/voices.json` — same settings and sales script, different voice:
+Customers choose between the agents in `app/voices.json`. Same settings and sales script, different voice:
 
-| Agent | Voice | Bolna / ElevenLabs voice |
+| Agent | English and Hindi | Tamil, Telugu, Kannada, Malayalam, Marathi, Bengali, Gujarati |
 |---|---|---|
-| **Arjun** | Male, warm and energetic | Viraj (`iWNf11sz1GrUE4ppxTOL`) |
-| **Kavya** | Female, friendly and calm | Nila (`V9LCAAi4tTlqe9JadbCo`) |
+| **Arjun** (male) | ElevenLabs Viraj (`iWNf11sz1GrUE4ppxTOL`) | Sarvam Abhilash (`bulbul:v2`) |
+| **Kavya** (female) | Sarvam Anushka (`bulbul:v2`) | Sarvam Anushka (`bulbul:v2`) |
 
-- `name` is what customers see and how the agent introduces itself on calls; `provider_config.voice` is the
-  original voice name in Bolna.
-- `sample_url`: paste each voice's full `preview_url` from Bolna's voice list to show a play button.
-- `temperature`, `similarity_boost`, `speed`, `style` tune how expressive the voice sounds.
+- Each agent has a default voice (`provider`, `provider_config`) and optional `by_language` voices for
+  languages where another voice sounds better. Sarvam speaks all nine languages natively; ElevenLabs only
+  covers English and Hindi well.
+- Speech recognition: English calls use Deepgram (template); every other language uses Sarvam `saarika:v2.5`
+  with the language set (`ta-IN`, `te-IN`, …), so the agent understands the customer.
+- The AI writes replies in the language's own script (e.g. Tamil script, not Tamil in English letters) so the
+  voice pronounces them properly; everyday English words stay in English.
+- `name` is what customers see and how the agent introduces itself on calls.
+- `sample_url`: a link to a short sample of the voice, to show a play button.
+- Other Sarvam female voices: `manisha`, `vidya`, `arya`; male: `abhilash`, `karun`, `hitesh`.
 
 ### Outcomes
 
