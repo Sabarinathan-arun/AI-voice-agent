@@ -90,14 +90,14 @@ and sales script, different voice. Both are Sarvam `bulbul:v3` voices, which spe
   natural Indian-language speech than `gpt-4o-mini`; if the Bolna account doesn't offer it, `gpt-4o-mini` is used.
 - **Opening line:** if left empty, a greeting in the call language introduces the agent by name
   (`DEFAULT_GREETINGS`); the setup page shows it and warns when a typed line is in English letters for a
-  non-English call. "Can you hear me?" check-ins are per language too.
+  non-English call. "Can you hear me?" check-ins are in the campaign language.
 - **Call handling** (`app/bolna_agent_template.json`): voicemail detection off (it hung up on real people),
   no background "hmm"s, a customer's turn ends after a 0.5 s pause (English),
   hang up after 20 s of silence, calls up to 10 minutes.
-- **Language switching:** each agent carries a transcriber and the same voice for every call language
-  (Bolna `multilingual` pools, labelled `en`, `hi`, `ta`, …) and starts in the campaign's language. When the
-  customer answers in, or asks for, another language, the AI switches (Bolna's `switch_language` tool) and carries
-  on in that language, colloquially. Only the languages a call uses are connected.
+- **Language switching:** one Sarvam `saaras:v3` transcriber in auto-detect mode (language `unknown`)
+  recognises whichever language the customer speaks; after each reply Bolna points the Sarvam voice at that
+  language, and the AI answers in it. The call starts in the campaign's language. (Bolna's per-language
+  transcriber/voice pools are not used: with them the agent stopped hearing callers.)
 - `LANGUAGE_SWITCHING=false` (Render environment) turns switching off: each call stays in the campaign language.
 - After each call the server logs `call finished: ... agent_turns=N customer_turns=N hangup=...` (no names, numbers
   or transcript text); `customer_turns=0` means the agent heard nothing.

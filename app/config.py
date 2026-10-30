@@ -90,6 +90,6 @@ def load_settings() -> Settings:
         call_timeout_minutes=_int("CALL_TIMEOUT_MINUTES", 30),
         worker_interval_seconds=_int("WORKER_INTERVAL_SECONDS", 5),
         results_retention_days=_int("RESULTS_RETENTION_DAYS", 7),
-        # false: each call stays in the campaign language (no multilingual pools at Bolna)
+        # false: each call stays in the campaign language (no language auto-detection)
         language_switching=os.environ.get("LANGUAGE_SWITCHING", "true").strip().lower() not in ("0", "false", "no", "off"),
     )
