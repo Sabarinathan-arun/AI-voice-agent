@@ -118,9 +118,10 @@ A call where the customer agreed a time is marked Interested and the time appear
 Calls nobody spoke on show **No answer**, as do unanswered and busy calls.
 
 **How the columns are filled:** with `ANTHROPIC_API_KEY` set (recommended), Claude (`claude-haiku-5-5`, low
-effort) reads each answered call's transcript once and returns `outcome`, `callback_time` and `key_points` as JSON
-(`app/extract.py`); its answers stand. Without the key, the app uses whatever Bolna returns: labelled lines at the
-end of Bolna's summary (`SUMMARY_INSTRUCTIONS`), Bolna Extractions, or a keyword guess for the outcome. Calls
+effort) reads each answered call's transcript once and returns `callback_time` and `key_points` as JSON
+(`app/extract.py`); its answers stand. Outcome is not sent to Claude: it comes from Bolna (summary lines or
+Extractions) or a keyword guess from the summary. Without the key, Call booked for and Key points use whatever
+Bolna returns. Calls
 nobody spoke on are "No answer" and are not sent to Claude. Server log: `call read by Claude: ...`.
 
 ### Bolna

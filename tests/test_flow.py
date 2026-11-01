@@ -486,8 +486,7 @@ def test_claude_fills_the_result_columns_once_per_answered_call(settings, bolna,
     from fastapi.testclient import TestClient
     from app.main import create_app
     from tests.conftest import FakeAuth
-    extractor = FakeExtractor({"outcome": "interested", "callback_time": "Saturday 10 am",
-                               "key_points": "Asked about EMI"})
+    extractor = FakeExtractor({"callback_time": "Saturday 10 am", "key_points": "Asked about EMI"})
     app = create_app(settings, bolna=bolna, payments=payments, auth=FakeAuth(), run_worker=False,
                      extractor=extractor)
     with TestClient(app) as client:
@@ -499,14 +498,15 @@ def test_claude_fills_the_result_columns_once_per_answered_call(settings, bolna,
         client.worker.tick()
         bolna.executions["exec-0"] = {"id": "exec-0", "status": "completed", "conversation_duration": 60,
                                       "transcript": "assistant: Vanakkam\nuser: Saturday 10 vaanga",
-                                      "summary": "Customer is not interested."}  # keyword guess would be wrong
+                                      "summary": "Customer declined."}  # Outcome is still decided from this
         bolna.executions["exec-1"] = {"id": "exec-1", "status": "completed", "conversation_duration": 5,
                                       "transcript": "assistant: Hello?"}  # nobody spoke
         client.worker.tick()
         client.post("/api/webhooks/bolna", json={"id": "exec-0"})  # same call reported again
         client.worker.tick()
         leads = client.get(f"/api/campaigns/{cid}").json()["leads"]
-    assert (leads[0]["outcome"], leads[0]["callback_time"]) == ("interested", "Saturday 10 am")
+    lead = leads[0]
+    assert (lead["callback_time"], lead["outcome"]) == ("Saturday 10 am", "not_interested")  # Claude: columns only
     assert leads[1]["outcome"] == "no_answer" and leads[1]["callback_time"] is None
     assert extractor.calls == [("assistant: Vanakkam\nuser: Saturday 10 vaanga", "Acme Solar")]  # once, answered only
 

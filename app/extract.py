@@ -1,7 +1,7 @@
-"""Fills a call's Outcome, Call booked for and Key points by having Claude read the transcript.
+"""Fills a call's Call booked for and Key points by having Claude read the transcript.
 
 Used when ANTHROPIC_API_KEY is set. It does not depend on Bolna returning extracted data: after an answered call,
-the transcript Bolna already gives us is sent to Claude, which returns the three fields as JSON.
+the transcript Bolna already gives us is sent to Claude, which returns the two fields as JSON.
 """
 
 import json
@@ -18,9 +18,6 @@ MODEL = "claude-haiku-5-5"  # fast and inexpensive; enough for three fields per 
 SYSTEM = (
     "You read transcripts of outbound sales phone calls made by an AI agent for an Indian business. The customer "
     "may speak any Indian language, English, or a mix. Fill the fields from what was actually said; never guess.\n"
-    "- outcome: interested if the customer showed interest, asked for details or prices, agreed to a "
-    "visit/demo/meeting, or asked to be called back; not_interested if they declined or were not keen; "
-    "wrong_number only if they said it is the wrong number or not the person called.\n"
     "- callback_time: the date and time the customer agreed to for a call back, visit, demo or meeting, written "
     "in English as they said it (for example \"Saturday 10 am\", \"tomorrow evening\"). Empty string if no time "
     "was agreed.\n"
@@ -31,11 +28,10 @@ SYSTEM = (
 SCHEMA = {
     "type": "object",
     "properties": {
-        "outcome": {"type": "string", "enum": ["interested", "not_interested", "wrong_number"]},
         "callback_time": {"type": "string"},
         "key_points": {"type": "string"},
     },
-    "required": ["outcome", "callback_time", "key_points"],
+    "required": ["callback_time", "key_points"],
     "additionalProperties": False,
 }
 
@@ -45,7 +41,7 @@ class CallExtractor:
         self._client = anthropic.Anthropic(api_key=api_key)
 
     def extract(self, transcript: str, business_name: str | None = None) -> dict | None:
-        """{"outcome", "callback_time", "key_points"} for a call, or None if Claude couldn't be used."""
+        """{"callback_time", "key_points"} for a call, or None if Claude couldn't be used."""
         context = f"Business: {business_name}\n\n" if business_name else ""
         try:
             response = self._client.messages.create(
@@ -74,7 +70,7 @@ class CallExtractor:
         except ValueError:
             log.warning("Claude returned call results that aren't JSON")
             return None
-        return {key: (data.get(key) or "").strip() or None for key in ("outcome", "callback_time", "key_points")}
+        return {key: (data.get(key) or "").strip() or None for key in ("callback_time", "key_points")}
 
 
 def make_extractor(settings: Settings) -> CallExtractor | None:
