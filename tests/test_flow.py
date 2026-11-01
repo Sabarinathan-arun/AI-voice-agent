@@ -506,7 +506,8 @@ def test_claude_fills_the_result_columns_once_per_answered_call(settings, bolna,
         client.worker.tick()
         leads = client.get(f"/api/campaigns/{cid}").json()["leads"]
     lead = leads[0]
-    assert (lead["callback_time"], lead["outcome"]) == ("Saturday 10 am", "not_interested")  # Claude: columns only
+    # A booked time always means Interested, even though the summary sounded negative (checked after a re-report too).
+    assert (lead["callback_time"], lead["outcome"]) == ("Saturday 10 am", "interested")
     assert leads[1]["outcome"] == "no_answer" and leads[1]["callback_time"] is None
     assert extractor.calls == [("assistant: Vanakkam\nuser: Saturday 10 vaanga", "Acme Solar")]  # once, answered only
 

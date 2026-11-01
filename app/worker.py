@@ -339,6 +339,10 @@ class CampaignWorker:
             for key in ("callback_time", "key_points"):
                 fields.pop(key, None)
         fields.update(self.read_call(lead, fields))
+        # A customer who agreed to a time is a warm lead, whatever the summary sounded like.
+        booked = fields.get("callback_time") or (lead.get("callback_time") if lead.get("ai_read") else None)
+        if booked and fields.get("status") == "completed" and fields.get("outcome") != "wrong_number":
+            fields["outcome"] = "interested"
         self.store.update_lead(lead["id"], **fields)
         if fields.get("status") in TERMINAL_STATUSES and lead.get("status") not in TERMINAL_STATUSES:
             log_call_result(lead, execution, fields)
