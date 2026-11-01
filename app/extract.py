@@ -13,7 +13,7 @@ from .config import Settings
 
 log = logging.getLogger(__name__)
 
-MODEL = "claude-opus-5-5"
+MODEL = "claude-haiku-5-5"  # fast and inexpensive; enough for three fields per call
 
 SYSTEM = (
     "You read transcripts of outbound sales phone calls made by an AI agent for an Indian business. The customer "
@@ -48,17 +48,13 @@ class CallExtractor:
         """{"outcome", "callback_time", "key_points"} for a call, or None if Claude couldn't be used."""
         context = f"Business: {business_name}\n\n" if business_name else ""
         try:
-            response = self._client.beta.messages.create(
+            response = self._client.messages.create(
                 model=MODEL,
                 max_tokens=4000,
                 system=SYSTEM,
                 messages=[{"role": "user",
                            "content": f"{context}<transcript>\n{transcript}\n</transcript>"}],
                 output_config={"effort": "low", "format": {"type": "json_schema", "schema": SCHEMA}},
-                # If Claude's safety checks ever decline a transcript, Anthropic re-runs it on its recommended
-                # fallback model instead of returning nothing.
-                betas=["server-side-fallback-2026-07-01"],
-                fallbacks="default",
             )
         except anthropic.AuthenticationError:
             log.error("ANTHROPIC_API_KEY was rejected; call results can't be filled in")
