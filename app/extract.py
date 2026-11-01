@@ -13,7 +13,7 @@ from .config import Settings
 
 log = logging.getLogger(__name__)
 
-MODEL = "claude-haiku-5-5"  # fast and inexpensive; enough for three fields per call
+MODEL = "claude-haiku-5-5"  # fast and inexpensive; enough for two fields per call
 
 SYSTEM = (
     "You read transcripts of outbound sales phone calls made by an AI agent for an Indian business. The customer "
