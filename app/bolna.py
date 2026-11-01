@@ -71,6 +71,17 @@ FALLBACK_LLM = "gpt-4o-mini"
 # execution's extracted_data as {category: {name: {"subjective": text, "objective": option, "confidence": ...}}}.
 # They fill the Outcome, Call booked for and Key points columns. (Bolna retired the older "agent extraction" on
 # 18 September 2026.)
+# Bolna's call summary, ending in labelled lines the app copies into the Outcome, Call booked for and Key points
+# columns (see split_summary in worker.py).
+SUMMARY_INSTRUCTIONS = (
+    "Summarise the sales call in 2-3 short sentences, in English. Then add exactly these three lines at the end, "
+    "in English, each on its own line:\n"
+    "Outcome: interested, not_interested or wrong_number (interested = showed interest, asked for details, agreed "
+    "to a visit/demo/meeting or asked to be called back)\n"
+    "Booked for: the date and time the customer agreed to for a call back, visit, demo or meeting, as they said it "
+    "(for example: Saturday 10 am), or none\n"
+    "Key points: one short sentence with the customer's main questions, objections or commitments"
+)
 EXTRACTION_CATEGORY = "Call results"
 EXTRACTION_MODEL = "gpt-4.1-mini"
 EXTRACTIONS = [
@@ -317,7 +328,7 @@ def build_agent_payload(template_path: str, campaign: dict, webhook_url: str | N
         task.setdefault("task_config", {})["check_user_online_message"] = STILL_THERE[LANGUAGES.get(language, "en")]
         llm_config = tools.get("llm_agent", {}).get("llm_config")
         if llm_config is not None:  # Bolna reads the summary setting from the LLM config
-            llm_config.setdefault("summarization_details", "Summarise the sales call in 2-3 short sentences, in English.")
+            llm_config.setdefault("summarization_details", SUMMARY_INSTRUCTIONS)
         if tools.get("transcriber") is not None:
             tools["transcriber"] = transcriber_for(tools["transcriber"], language, region_codes)
             if auto_language:

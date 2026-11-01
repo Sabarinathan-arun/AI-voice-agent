@@ -117,13 +117,11 @@ Bolna's extraction (configured in the agent's `llm_config`) decides; if it retur
 A call where the customer agreed a time is marked Interested and the time appears under **Call booked for**.
 Calls nobody spoke on show **No answer**, as do unanswered and busy calls.
 
-**How the columns are filled:** right after creating each campaign's agent, the app attaches Bolna
-**Extractions** to it: a category (`Call results`) and one question ("disposition") per column: `outcome`
-(interested / not_interested / wrong_number), `callback_time` and `key_points` (`EXTRACTIONS` in `app/bolna.py`).
-Bolna answers them from the transcript after each call, in `extracted_data`; the app re-reads each answered call for
-up to 10 minutes until they arrive. If Bolna refuses them, the campaign still runs and the log says
-`Bolna extractions not set up for agent ...` with Bolna's reason. (Bolna retired its older "agent extraction"
-on 18 September 2026.)
+**How the columns are filled:** Bolna's call summary is set up (`SUMMARY_INSTRUCTIONS` in `app/bolna.py`) to end
+with three lines, `Outcome: ...`, `Booked for: ...` and `Key points: ...`; the app copies them into the columns
+and shows the rest as the summary (`split_summary` in `app/worker.py`). Each new agent also gets Bolna
+**Extractions** (a `Call results` category with `outcome`, `callback_time` and `key_points`); when Bolna returns
+those, they win. The app re-reads each answered call for up to 10 minutes until the results arrive.
 
 ### Bolna
 

@@ -355,3 +355,29 @@ def test_bolna_extractions_format_fills_the_columns():
                             "extracted_data": {"Call results": {"outcome": {"objective": "not_interested"},
                                                                 "callback_time": {"subjective": "none"}}}})
     assert none["outcome"] == "not_interested" and none["callback_time"] is None
+
+
+def test_result_columns_from_the_summary_lines(settings):
+    from app.bolna import SUMMARY_INSTRUCTIONS
+    from app.worker import parse_execution, split_summary
+    # Bolna is asked to end its summary with the three labelled lines.
+    payload = build_agent_payload(settings.bolna_agent_template, {"id": "abcdefgh1", "business_name": "A",
+                                  "product_details": "p", "sales_instructions": "s", "language": "Tamil"}, None)
+    llm = payload["agent_config"]["tasks"][0]["tools_config"]["llm_agent"]["llm_config"]
+    assert llm["summarization_details"] == SUMMARY_INSTRUCTIONS and "Booked for:" in SUMMARY_INSTRUCTIONS
+
+    fields = parse_execution({"status": "completed", "transcript": "assistant: hi\nuser: Saturday vaanga",
+                              "summary": "Kavya called Asha about solar.\nOutcome: interested\n"
+                                         "Booked for: Saturday 10 am\nKey points: Asked about EMI."})
+    assert (fields["outcome"], fields["callback_time"], fields["key_points"], fields["summary"]) == (
+        "interested", "Saturday 10 am", "Asked about EMI.", "Kavya called Asha about solar.")
+    # Inline, markdown bullets, "none" and loose outcome wording.
+    assert split_summary("Declined. Outcome: Not interested. Booked for: none. Key points: Has solar.") == (
+        "Declined.", {"outcome": "not_interested", "key_points": "Has solar."})
+    assert split_summary("Call.\n- **Outcome:** Interested – asked price\n- **Booked for:** tomorrow 5 pm") == (
+        "Call.", {"outcome": "interested", "callback_time": "tomorrow 5 pm"})
+    assert split_summary("The outcome was unclear.") == ("The outcome was unclear.", {})
+    # Bolna Extractions, when present, win over the summary lines.
+    both = parse_execution({"status": "completed", "transcript": "user: hi", "summary": "S\nBooked for: Monday",
+                            "extracted_data": {"Call results": {"callback_time": {"subjective": "Friday 4 pm"}}}})
+    assert both["callback_time"] == "Friday 4 pm"

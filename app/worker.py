@@ -68,6 +68,43 @@ def _plain(value):
     return str(value) if value not in (None, "") else None
 
 
+SUMMARY_LINES = {"outcome": "outcome", "booked for": "callback_time", "callback time": "callback_time",
+                 "key points": "key_points"}
+NOTHING = ("", "none", "null", "n/a", "na", "no", "nil", "empty", "-", "not mentioned", "not discussed")
+
+
+def split_summary(summary: str | None) -> tuple[str | None, dict]:
+    """Bolna's summary ends with "Outcome: ...", "Booked for: ..." and "Key points: ..." lines (SUMMARY_INSTRUCTIONS).
+    Returns the summary without them, and their values by column."""
+    if not summary:
+        return summary, {}
+    labels = "outcome|booked for|callback time|key points"
+    found = {}
+    # "Label: value" up to the next label or the end, on its own line or inline in the paragraph.
+    bullet = r"[\s*•\-]*"  # markdown bullets and bold around a label
+    pattern = re.compile(rf"{bullet}\b({labels})\b\s*\**\s*[:\-]\s*(.*?)(?={bullet}\b(?:{labels})\b\s*\**\s*[:\-]|$)",
+                         flags=re.I | re.S)
+    for match in pattern.finditer(str(summary)):
+        value = match.group(2).strip().strip("*•-").strip()
+        if value.lower().rstrip(".") not in NOTHING:
+            found[SUMMARY_LINES[match.group(1).lower()]] = value.rstrip()
+    first = pattern.search(str(summary))
+    text = str(summary)[:first.start()].strip() if first else str(summary).strip()
+    if "outcome" in found:
+        found["outcome"] = _outcome_word(found["outcome"])
+    return text or None, found
+
+
+def _outcome_word(text: str) -> str:
+    """'Not interested.' / 'Interested - asked for the price' -> not_interested / interested."""
+    words = text.lower()
+    if "wrong" in words:
+        return "wrong_number"
+    if re.search(r"\b(not|no|un)\W*interest", words) or "not_interested" in words:
+        return "not_interested"
+    return "interested" if "interest" in words else words.split()[0].strip(".,") if words.split() else words
+
+
 def parse_execution(execution: dict) -> dict:
     """Map a Bolna execution payload to lead fields. Tolerant of missing fields."""
     status = str(execution.get("status") or "unknown").lower()
@@ -83,7 +120,11 @@ def parse_execution(execution: dict) -> dict:
     transcript = _first(execution, "transcript")
     if isinstance(transcript, list):
         transcript = "\n".join(f"{t.get('role', '')}: {t.get('content', '')}" for t in transcript if isinstance(t, dict))
-    summary = _first(execution, "summary") or _find_extracted(extracted, "call summary", "summary")
+    summary, from_summary = split_summary(_first(execution, "summary") or _find_extracted(extracted, "call summary",
+                                                                                          "summary"))
+    # Bolna Extractions win; otherwise use the labelled lines at the end of the summary.
+    if from_summary.get("outcome") and not _find_extracted(extracted, "outcome"):
+        extracted = {**extracted, "outcome": from_summary["outcome"]}
     duration = _first(execution, "conversation_duration", "conversation_time") or _first(telephony, "duration")
     try:
         duration = float(duration) if duration is not None else None
@@ -94,14 +135,15 @@ def parse_execution(execution: dict) -> dict:
         status = "in-progress"  # unrecognised intermediate status; the call timeout still applies
     callback = _find_extracted(extracted, "callback time", "callback_time", "call back time", "appointment",
                                "meeting time", "visit time")
-    if callback and callback.strip().lower() in ("", "none", "null", "n/a", "na", "no", "empty", "-"):
+    if callback and callback.strip().lower().rstrip(".") in NOTHING:
         callback = None
+    callback = callback or from_summary.get("callback_time")
     fields = {
         "status": status,
         "transcript": transcript,
         "summary": summary,
         "callback_time": callback,
-        "key_points": _find_extracted(extracted, "key points", "key_points"),
+        "key_points": _find_extracted(extracted, "key points", "key_points") or from_summary.get("key_points"),
         "duration_seconds": duration,
         "recording_url": _first(telephony, "recording_url"),
         "extracted_data": json.dumps(extracted) if extracted else None,
@@ -295,6 +337,8 @@ class CampaignWorker:
             log_call_result(lead, execution, fields)
         if fields.get("status") == "completed":  # answered: wait for Bolna's follow-up extraction
             extracted = _extracted_keys(execution)
+            if extracted == "none" and fields.get("key_points"):  # filled from the summary's labelled lines
+                extracted = "summary"
             if extracted == "none" and lead["id"] not in self._awaiting_extraction:
                 self._awaiting_extraction[lead["id"]] = (execution.get("id") or lead["execution_id"],
                                                          utcnow() + EXTRACTION_WAIT)
