@@ -469,3 +469,47 @@ def test_gives_up_waiting_for_extraction_and_logs_what_bolna_sent(client, bolna,
         assert client.worker.tick(utcnow() + timedelta(minutes=11)) is False
     warning = next(r.getMessage() for r in caplog.records if "no extraction" in r.getMessage())
     assert "execution_fields=id,status,summary,transcript" in warning
+
+
+class FakeExtractor:
+    """Stands in for Claude reading a call."""
+
+    def __init__(self, result):
+        self.result, self.calls = result, []
+
+    def extract(self, transcript, business_name=None):
+        self.calls.append((transcript, business_name))
+        return self.result
+
+
+def test_claude_fills_the_result_columns_once_per_answered_call(settings, bolna, payments):
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    from tests.conftest import FakeAuth
+    extractor = FakeExtractor({"outcome": "interested", "callback_time": "Saturday 10 am",
+                               "key_points": "Asked about EMI"})
+    app = create_app(settings, bolna=bolna, payments=payments, auth=FakeAuth(), run_worker=False,
+                     extractor=extractor)
+    with TestClient(app) as client:
+        client.worker = app.state.worker
+        signup(client)
+        top_up(client, payments)
+        cid = ready_campaign(client, b"name,phone\nAsha,9876543210\nRavi,9876543211\n")
+        client.post(f"/api/campaigns/{cid}/start")
+        client.worker.tick()
+        bolna.executions["exec-0"] = {"id": "exec-0", "status": "completed", "conversation_duration": 60,
+                                      "transcript": "assistant: Vanakkam\nuser: Saturday 10 vaanga",
+                                      "summary": "Customer is not interested."}  # keyword guess would be wrong
+        bolna.executions["exec-1"] = {"id": "exec-1", "status": "completed", "conversation_duration": 5,
+                                      "transcript": "assistant: Hello?"}  # nobody spoke
+        client.worker.tick()
+        client.post("/api/webhooks/bolna", json={"id": "exec-0"})  # same call reported again
+        client.worker.tick()
+        leads = client.get(f"/api/campaigns/{cid}").json()["leads"]
+    assert (leads[0]["outcome"], leads[0]["callback_time"]) == ("interested", "Saturday 10 am")
+    assert leads[1]["outcome"] == "no_answer" and leads[1]["callback_time"] is None
+    assert extractor.calls == [("assistant: Vanakkam\nuser: Saturday 10 vaanga", "Acme Solar")]  # once, answered only
+
+
+def test_without_claude_the_columns_fall_back_to_bolna(client, bolna, payments):
+    assert client.worker.extractor is None  # no ANTHROPIC_API_KEY in tests

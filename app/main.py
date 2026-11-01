@@ -23,6 +23,7 @@ from .accounts import Accounts
 from .bolna import LANGUAGES, BolnaError, default_greeting, load_voices, make_bolna_client
 from .config import Settings, load_settings
 from .export import build_results_workbook
+from .extract import make_extractor
 from .db import Database
 from .supabase_auth import AuthError, make_auth
 from .leads import LeadFileError, parse_leads
@@ -64,7 +65,7 @@ class SetupIn(BaseModel):
 
 
 def create_app(settings: Settings | None = None, bolna=None, payments=None, auth=None,
-               run_worker: bool = True) -> FastAPI:
+               run_worker: bool = True, extractor=None) -> FastAPI:
     settings = settings or load_settings()
     database = Database(settings.database_url)
     store = Store(database)
@@ -77,7 +78,8 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, auth
         raise RuntimeError(f"No voices configured in {settings.voices_path}")
     voices_by_id = {v["id"]: v for v in voices}
     default_voice = voices[0]
-    worker = CampaignWorker(store, bolna, settings, accounts)
+    extractor = extractor if extractor is not None else make_extractor(settings)
+    worker = CampaignWorker(store, bolna, settings, accounts, extractor)
     secure_cookie = settings.app_base_url.startswith("https://")
 
     @asynccontextmanager

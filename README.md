@@ -117,11 +117,11 @@ Bolna's extraction (configured in the agent's `llm_config`) decides; if it retur
 A call where the customer agreed a time is marked Interested and the time appears under **Call booked for**.
 Calls nobody spoke on show **No answer**, as do unanswered and busy calls.
 
-**How the columns are filled:** Bolna's call summary is set up (`SUMMARY_INSTRUCTIONS` in `app/bolna.py`) to end
-with three lines, `Outcome: ...`, `Booked for: ...` and `Key points: ...`; the app copies them into the columns
-and shows the rest as the summary (`split_summary` in `app/worker.py`). Each new agent also gets Bolna
-**Extractions** (a `Call results` category with `outcome`, `callback_time` and `key_points`); when Bolna returns
-those, they win. The app re-reads each answered call for up to 10 minutes until the results arrive.
+**How the columns are filled:** with `ANTHROPIC_API_KEY` set (recommended), Claude (`claude-opus-5-5`, low
+effort) reads each answered call's transcript once and returns `outcome`, `callback_time` and `key_points` as JSON
+(`app/extract.py`); its answers stand. Without the key, the app uses whatever Bolna returns: labelled lines at the
+end of Bolna's summary (`SUMMARY_INSTRUCTIONS`), Bolna Extractions, or a keyword guess for the outcome. Calls
+nobody spoke on are "No answer" and are not sent to Claude. Server log: `call read by Claude: ...`.
 
 ### Bolna
 

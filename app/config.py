@@ -52,6 +52,7 @@ class Settings:
     worker_interval_seconds: int
     results_retention_days: int
     language_switching: bool
+    anthropic_api_key: str
 
 
 def load_settings() -> Settings:
@@ -91,5 +92,7 @@ def load_settings() -> Settings:
         worker_interval_seconds=_int("WORKER_INTERVAL_SECONDS", 5),
         results_retention_days=_int("RESULTS_RETENTION_DAYS", 7),
         # false: each call stays in the campaign language (no language auto-detection)
+        # Claude reads each answered call and fills Outcome, Call booked for and Key points (optional)
+        anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", "").strip(),
         language_switching=os.environ.get("LANGUAGE_SWITCHING", "true").strip().lower() not in ("0", "false", "no", "off"),
     )

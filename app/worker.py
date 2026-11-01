@@ -215,8 +215,11 @@ def call_cost_paise(seconds: float, price_per_minute_paise: int) -> int:
 
 
 class CampaignWorker:
-    def __init__(self, store: Store, bolna, settings, accounts):
+    def __init__(self, store: Store, bolna, settings, accounts, extractor=None):
         self.store = store
+        self.extractor = extractor  # Claude reads answered calls (extract.py); None without ANTHROPIC_API_KEY
+        self._extracting: set[int] = set()
+        self._extract_lock = threading.Lock()
         self.bolna = bolna
         self.settings = settings
         self.accounts = accounts
@@ -332,6 +335,10 @@ class CampaignWorker:
 
     def apply_execution(self, lead: dict, execution: dict) -> None:
         fields = {k: v for k, v in parse_execution(execution).items() if v is not None}
+        if lead.get("ai_read"):  # Claude's reading of this call stands; later Bolna updates don't redo it
+            for key in ("outcome", "callback_time", "key_points"):
+                fields.pop(key, None)
+        fields.update(self.read_call(lead, fields))
         self.store.update_lead(lead["id"], **fields)
         if fields.get("status") in TERMINAL_STATUSES and lead.get("status") not in TERMINAL_STATUSES:
             log_call_result(lead, execution, fields)
@@ -346,6 +353,33 @@ class CampaignWorker:
                 log.info("extraction received: execution=%s extracted=%s", execution.get("id"), extracted)
         if fields.get("status") in TERMINAL_STATUSES:
             self.bill(lead, fields.get("duration_seconds") or 0)
+
+    def read_call(self, lead: dict, fields: dict) -> dict:
+        """Once per answered call, have Claude fill Outcome, Call booked for and Key points from the transcript.
+        Its answers replace Bolna's (or the keyword guess); calls nobody spoke on stay "no answer"."""
+        transcript = fields.get("transcript") or ""
+        if (self.extractor is None or fields.get("status") != "completed" or lead.get("ai_read")
+                or not re.search(r"^\s*user\s*:", transcript, flags=re.I | re.M)):
+            return {}
+        with self._extract_lock:  # webhook and worker may see the same call at once
+            if lead["id"] in self._extracting:
+                return {}
+            self._extracting.add(lead["id"])
+        try:
+            campaign = self.store.get_campaign(lead["campaign_id"]) or {}
+            result = self.extractor.extract(transcript, campaign.get("business_name"))
+        finally:
+            with self._extract_lock:
+                self._extracting.discard(lead["id"])
+        if not result:
+            return {}
+        log.info("call read by Claude: execution=%s outcome=%s booked=%s key_points=%s", lead.get("execution_id"),
+                 result["outcome"], "yes" if result["callback_time"] else "no",
+                 "yes" if result["key_points"] else "no")
+        found = {k: v for k, v in result.items() if v}
+        if found.get("callback_time"):
+            found["outcome"] = "interested"  # a booked time is always a warm lead
+        return {**found, "ai_read": True}
 
     def collect_extractions(self, now: datetime) -> None:
         """Re-read answered calls until Bolna's extraction (Call booked for, Key points) arrives, or give up."""

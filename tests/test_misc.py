@@ -381,3 +381,32 @@ def test_result_columns_from_the_summary_lines(settings):
     both = parse_execution({"status": "completed", "transcript": "user: hi", "summary": "S\nBooked for: Monday",
                             "extracted_data": {"Call results": {"callback_time": {"subjective": "Friday 4 pm"}}}})
     assert both["callback_time"] == "Friday 4 pm"
+
+
+def test_call_extractor_request_and_failures(monkeypatch):
+    from types import SimpleNamespace
+    import anthropic
+    from app.extract import CallExtractor
+    extractor = CallExtractor("test-key")
+    sent = {}
+
+    def create(**kwargs):
+        sent.update(kwargs)
+        return SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(
+            type="text", text='{"outcome": "interested", "callback_time": "Friday 4 pm", "key_points": ""}')])
+
+    monkeypatch.setattr(extractor._client.beta.messages, "create", create)
+    assert extractor.extract("assistant: hi\nuser: Friday 4 ku vaanga", "Acme") == {
+        "outcome": "interested", "callback_time": "Friday 4 pm", "key_points": None}
+    assert sent["model"] == "claude-opus-5-5" and sent["fallbacks"] == "default"
+    assert sent["output_config"]["format"]["schema"]["required"] == ["outcome", "callback_time", "key_points"]
+    assert "Friday 4 ku vaanga" in sent["messages"][0]["content"] and "Business: Acme" in sent["messages"][0]["content"]
+
+    monkeypatch.setattr(extractor._client.beta.messages, "create",
+                        lambda **k: SimpleNamespace(stop_reason="refusal", content=[]))
+    assert extractor.extract("user: hi") is None
+
+    def down(**kwargs):
+        raise anthropic.APIConnectionError(request=httpx.Request("POST", "https://api.anthropic.com"))
+    monkeypatch.setattr(extractor._client.beta.messages, "create", down)
+    assert extractor.extract("user: hi") is None
