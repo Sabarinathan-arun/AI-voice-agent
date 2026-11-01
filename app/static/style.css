@@ -309,6 +309,13 @@ a.link-btn { text-decoration: none; }
 .campaign-item:hover { border-color: color-mix(in srgb, var(--brand) 40%, var(--line)); background: #fcfcff; }
 .campaign-item b { display: block; }
 .campaign-item span { font-size: 13px; color: var(--muted); }
+/* Long lists scroll inside their card (about 5 campaigns / 8 history rows visible) */
+.scroll-list { max-height: 380px; overflow-y: auto; padding-right: 4px; overscroll-behavior: contain; }
+.scroll-table { max-height: 440px; overflow-y: auto; overscroll-behavior: contain; }
+.scroll-table thead th { position: sticky; top: 0; z-index: 1; }
+.scroll-list, .scroll-table { scrollbar-width: thin; scrollbar-color: #c9cbe0 transparent; }
+.scroll-list::-webkit-scrollbar, .scroll-table::-webkit-scrollbar { width: 8px; height: 8px; }
+.scroll-list::-webkit-scrollbar-thumb, .scroll-table::-webkit-scrollbar-thumb { background: #c9cbe0; border-radius: 8px; }
 .amount-pos { color: var(--ok); font-weight: 700; white-space: nowrap; }
 .amount-neg { color: var(--fg); font-weight: 700; white-space: nowrap; }
 .empty-note { color: var(--muted); font-size: 14px; padding: 8px 0; }
