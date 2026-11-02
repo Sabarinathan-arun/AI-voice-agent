@@ -435,3 +435,10 @@ def test_formal_words_are_swapped_for_the_english_ones_people_say():
     for swaps in ENGLISH_SWAPS.values():  # the call may switch to any language
         native, english = next(iter(swaps.items()))
         assert f'"{native}" -> "{english}"' in switching
+
+
+def test_agent_starts_speaking_after_a_short_phrase(settings):
+    # Bolna waits for buffer_size characters of the AI's reply before the voice starts (Sarvam: 30-200).
+    payload = build_agent_payload(settings.bolna_agent_template, {"id": "abcdefgh1", "business_name": "A",
+                                  "product_details": "p", "sales_instructions": "s", "language": "Tamil"}, None)
+    assert 30 <= payload["agent_config"]["tasks"][0]["tools_config"]["synthesizer"]["buffer_size"] <= 100
