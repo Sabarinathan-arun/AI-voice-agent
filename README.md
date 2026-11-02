@@ -86,8 +86,9 @@ and sales script, different voice. Both are Sarvam `bulbul:v3` voices, which spe
   its default speech detection.
 - **Colloquial speech:** the sales script opens with "sound like a local person chatting, never like a newsreader"
   and gives, for every language, bookish sentences next to how people really say them, in that language's script
-  (`COLLOQUIAL_EXAMPLES` in `app/bolna.py`). Calls use OpenAI `gpt-4.1` (temperature 0.7), which writes far more
-  natural Indian-language speech than `gpt-4o-mini`; if the Bolna account doesn't offer it, `gpt-4o-mini` is used.
+  (`COLLOQUIAL_EXAMPLES` in `app/bolna.py`). The agent's replies are written by Google
+  `gemini-3.5-flash` (Bolna provider `google`, temperature 0.7, set in `app/bolna_agent_template.json`); if the
+  Bolna account doesn't offer it, OpenAI `gpt-4o-mini` is used (`FALLBACK_LLM`).
 - **Opening line:** if left empty, a greeting in the call language introduces the agent by name
   (`DEFAULT_GREETINGS`); the setup page shows it and warns when a typed line is in English letters for a
   non-English call. "Can you hear me?" check-ins are in the campaign language.

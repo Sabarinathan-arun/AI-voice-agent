@@ -226,10 +226,10 @@ def test_falls_back_to_a_smaller_ai_model_if_bolna_lacks_it(settings):
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path != "/v2/agent":  # extraction setup after the agent is created
             return httpx.Response(201, json={"id": "x"})
-        model = json.loads(request.content)["agent_config"]["tasks"][0]["tools_config"]["llm_agent"]["llm_config"]["model"]
-        models.append(model)
-        if model == "gpt-4.1":
-            return httpx.Response(400, json={"message": "Model gpt-4.1 is not available on your plan"})
+        llm = json.loads(request.content)["agent_config"]["tasks"][0]["tools_config"]["llm_agent"]["llm_config"]
+        models.append((llm["provider"], llm["model"]))
+        if llm["provider"] == "google":
+            return httpx.Response(400, json={"message": "Provider google is not enabled for your account"})
         return httpx.Response(200, json={"agent_id": "agent-11"})
 
     client = BolnaClient(dataclasses.replace(settings, bolna_api_key="k"))
@@ -237,7 +237,7 @@ def test_falls_back_to_a_smaller_ai_model_if_bolna_lacks_it(settings):
     campaign = {"id": "abcdefgh123", "business_name": "Acme", "product_details": "p", "sales_instructions": "s",
                 "language": "Tamil"}
     assert client.create_agent(campaign, None, load_voices(settings.voices_path)[0]) == "agent-11"
-    assert models == ["gpt-4.1"] * 4 + ["gpt-4o-mini"]
+    assert models == [("google", "gemini-3.5-flash")] * 4 + [("openai", "gpt-4o-mini")]
 
 
 def test_sales_script_shows_colloquial_examples_in_native_script(settings):
@@ -251,7 +251,7 @@ def test_sales_script_shows_colloquial_examples_in_native_script(settings):
         assert examples[0][1] in prompt
     template = json.load(open(settings.bolna_agent_template))
     llm = template["agent_config"]["tasks"][0]["tools_config"]["llm_agent"]["llm_config"]
-    assert llm["model"] == "gpt-4.1"
+    assert (llm["provider"], llm["model"]) == ("google", "gemini-3.5-flash")
 
 
 def test_opening_line_and_check_in_are_in_the_call_language(settings):

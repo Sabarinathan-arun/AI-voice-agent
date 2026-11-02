@@ -64,8 +64,8 @@ STILL_THERE = {
     "te": "హలో, వినిపిస్తుందా?", "kn": "ಹಲೋ, ಕೇಳಿಸ್ತಿದೆಯಾ?", "ml": "ഹലോ, കേൾക്കുന്നുണ്ടോ?",
     "mr": "हॅलो, ऐकू येतंय का?", "bn": "হ্যালো, শুনতে পাচ্ছেন?", "gu": "હેલો, સંભળાય છે?",
 }
-# Used if the Bolna account doesn't offer the template's AI model (gpt-4.1).
-FALLBACK_LLM = "gpt-4o-mini"
+# Used if the Bolna account doesn't offer the template's AI model (Gemini).
+FALLBACK_LLM = {"provider": "openai", "family": "openai", "model": "gpt-4o-mini"}
 
 # Bolna "Extractions": after each call Bolna answers these questions from the transcript and returns them in the
 # execution's extracted_data as {category: {name: {"subjective": text, "objective": option, "confidence": ...}}}.
@@ -412,8 +412,8 @@ class BolnaClient:
                 payload = build_agent_payload(self.settings.bolna_agent_template, campaign, webhook_url, voice,
                                               region_codes=region, auto_language=auto_language)
                 llm_config = payload["agent_config"]["tasks"][0]["tools_config"]["llm_agent"]["llm_config"]
-                model = llm_model or llm_config["model"]
-                llm_config["model"] = model
+                llm_config.update(llm_model or {})
+                model = llm_config["model"]
                 try:
                     data = self._request("POST", "/v2/agent", json=payload)
                     log.info("Bolna agent created: model=%s, language switching=%s, language codes=%s", model,
@@ -428,7 +428,9 @@ class BolnaClient:
                     error = exc
                     log.warning("Bolna refused agent (model=%s, auto_language=%s, region_codes=%s): %s",
                                 model, auto_language, region, exc)
-            if llm_model is None and model in str(error) and model != FALLBACK_LLM:
+            message = str(error).lower()
+            if llm_model is None and any(word in message for word in (model.lower(), llm_config.get("provider", ""),
+                                                                      "model", "llm", "provider")):
                 continue  # the AI model isn't available on this Bolna account
             raise error
 
