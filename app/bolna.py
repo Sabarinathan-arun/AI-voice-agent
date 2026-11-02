@@ -54,6 +54,17 @@ MIXED_EXAMPLES = {
     "Bengali": "আচ্ছা sir, আপনার জন্য একটা ভালো offer আছে। দু minute কথা বলা যাবে?",
     "Gujarati": "હા sir, તમારા માટે એક સરસ offer છે. બે minute વાત કરી શકીએ?",
 }
+# Formal or technical native words people avoid on a call -> the English word they actually say.
+ENGLISH_SWAPS = {
+    "Hindi": {"भुगतान": "payment", "प्रक्रिया": "process", "सुविधा": "facility", "आरक्षण": "booking"},
+    "Tamil": {"தள்ளுபடி": "discount", "முன்பதிவு": "booking", "கட்டணம்": "charges", "உத்தரவாதம்": "warranty"},
+    "Telugu": {"రాయితీ": "discount", "చెల్లింపు": "payment", "హామీ": "warranty", "నమోదు": "registration"},
+    "Kannada": {"ರಿಯಾಯಿತಿ": "discount", "ಪಾವತಿ": "payment", "ಖಾತರಿ": "warranty", "ನೋಂದಣಿ": "registration"},
+    "Malayalam": {"കിഴിവ്": "discount", "പണമടയ്ക്കൽ": "payment", "സൗകര്യം": "facility", "നടപടിക്രമം": "process"},
+    "Marathi": {"सवलत": "discount", "भरणा": "payment", "प्रक्रिया": "process", "नोंदणी": "registration"},
+    "Bengali": {"ছাড়": "discount", "অর্থপ্রদান": "payment", "প্রক্রিয়া": "process", "নিবন্ধন": "registration"},
+    "Gujarati": {"છૂટ": "discount", "ચુકવણી": "payment", "પ્રક્રિયા": "process", "નોંધણી": "registration"},
+}
 # Speech recognition for Indian languages: Sarvam saaras:v3 (with Bolna's default speech detection, which is
 # tuned for phone audio). English keeps the template's transcriber (Deepgram).
 INDIAN_TRANSCRIBER = {"provider": "sarvam", "model": "saaras:v3"}
@@ -211,6 +222,15 @@ def _language_rules(language: str, switch_languages: bool) -> str:
         "English words in English letters so they are spoken as English. Never spell an English word in Tamil, "
         "Hindi or any other script: write \"sir\", not \"சார்\" or \"सर\"; \"madam\", not \"மேடம்\"; and the "
         f"same for {ENGLISH_WORDS}.")
+    lines.append(
+        "- Whenever the native word is formal, technical, long or awkward to say, or a sentence would need bookish "
+        "grammar, use the English word or a short English phrase instead, the way people really talk. Keep the "
+        "sentence itself in the customer's language, usually with one to three English words in it: natural mixing, "
+        "not switching to full English sentences unless the customer does.")
+    for name in ([language] + [n for n in ENGLISH_SWAPS if n != language] if switch_languages else [language]):
+        if name in ENGLISH_SWAPS:
+            swaps = ", ".join(f"\"{native}\" -> \"{english}\"" for native, english in ENGLISH_SWAPS[name].items())
+            lines.append(f"  - {name}, say the English word: {swaps}")
     example = MIXED_EXAMPLES.get(language)
     if example:
         lines.append(f"- For example, in {language}: \"{example}\"")

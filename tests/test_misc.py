@@ -422,3 +422,16 @@ def test_mixed_language_example_for_each_indian_language():
         prompt = build_system_prompt({"business_name": "A", "product_details": "p", "sales_instructions": "s",
                                       "language": language})
         assert example in prompt and f"Write the {language} words" in prompt  # fixed language
+
+
+def test_formal_words_are_swapped_for_the_english_ones_people_say():
+    from app.bolna import ENGLISH_SWAPS, LANGUAGES, build_system_prompt
+    assert set(ENGLISH_SWAPS) == set(LANGUAGES) - {"English"}
+    base = {"business_name": "A", "product_details": "p", "sales_instructions": "s"}
+    tamil = build_system_prompt({**base, "language": "Tamil"})
+    assert "formal, technical, long or awkward" in tamil and '"தள்ளுபடி" -> "discount"' in tamil
+    assert '"भुगतान"' not in tamil  # fixed language: only its own swaps
+    switching = build_system_prompt({**base, "language": "Tamil"}, switch_languages=True)
+    for swaps in ENGLISH_SWAPS.values():  # the call may switch to any language
+        native, english = next(iter(swaps.items()))
+        assert f'"{native}" -> "{english}"' in switching
