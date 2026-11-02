@@ -160,7 +160,9 @@ def test_each_language_gets_a_voice_and_transcriber_that_speak_it(settings):
             assert "high_vad_sensitivity" not in transcriber
             assert f"Start the call in {language}" in prompt and "your voice follows automatically" in prompt
             assert "switch_language" not in prompt
-            assert "never in English letters" in prompt and "Tamil script" in prompt
+            assert "own script" in prompt and "Tamil script" in prompt
+            # English words such as "sir" are kept in English letters so they're spoken as English (not "saar").
+            assert 'write "sir", not "சார்"' in prompt and "offer" in prompt
             # Switching off: fixed language, Deepgram for English and Sarvam for Indian languages.
             fixed = build_agent_payload(settings.bolna_agent_template, {**base, "language": language}, None,
                                         voices[voice_id], auto_language=False)
@@ -410,3 +412,13 @@ def test_call_extractor_request_and_failures(monkeypatch):
         raise anthropic.APIConnectionError(request=httpx.Request("POST", "https://api.anthropic.com"))
     monkeypatch.setattr(extractor._client.messages, "create", down)
     assert extractor.extract("user: hi") is None
+
+
+def test_mixed_language_example_for_each_indian_language():
+    from app.bolna import LANGUAGES, MIXED_EXAMPLES, build_system_prompt
+    assert set(MIXED_EXAMPLES) == set(LANGUAGES) - {"English"}
+    for language, example in MIXED_EXAMPLES.items():
+        assert " sir" in example and "offer" in example  # English words in English letters
+        prompt = build_system_prompt({"business_name": "A", "product_details": "p", "sales_instructions": "s",
+                                      "language": language})
+        assert example in prompt and f"Write the {language} words" in prompt  # fixed language

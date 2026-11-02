@@ -39,6 +39,21 @@ SCRIPTS = {
     "Kannada": "Kannada script (ಕನ್ನಡ)", "Malayalam": "Malayalam script (മലയാളം)",
     "Marathi": "Devanagari (मराठी)", "Bengali": "Bengali script (বাংলা)", "Gujarati": "Gujarati script (ગુજરાતી)",
 }
+# English words Indians say in English even mid-sentence in their own language; written in English letters so the
+# voice says them as English (not "saar" for sir).
+ENGLISH_WORDS = ("okay, thank you, sorry, please, offer, discount, price, booking, EMI, free, site visit, demo, "
+                 "details, number, time, minute, problem, service and the product's name")
+# How a natural mixed reply looks in each language (English words in English letters).
+MIXED_EXAMPLES = {
+    "Hindi": "जी sir, आपके लिए एक अच्छा offer है। दो minute बात कर सकते हैं?",
+    "Tamil": "சரி sir, உங்களுக்கு ஒரு நல்ல offer இருக்கு. ரெண்டு minute பேசலாமா?",
+    "Telugu": "అలాగే sir, మీ కోసం ఒక మంచి offer ఉంది. రెండు minutes మాట్లాడొచ్చా?",
+    "Kannada": "ಸರಿ sir, ನಿಮಗೆ ಒಂದು ಒಳ್ಳೆ offer ಇದೆ. ಎರಡು minute ಮಾತಾಡಬಹುದಾ?",
+    "Malayalam": "ശരി sir, നിങ്ങൾക്ക് ഒരു നല്ല offer ഉണ്ട്. രണ്ട് minute സംസാരിക്കാമോ?",
+    "Marathi": "हो sir, तुमच्यासाठी एक मस्त offer आहे. दोन minute बोलू शकतो का?",
+    "Bengali": "আচ্ছা sir, আপনার জন্য একটা ভালো offer আছে। দু minute কথা বলা যাবে?",
+    "Gujarati": "હા sir, તમારા માટે એક સરસ offer છે. બે minute વાત કરી શકીએ?",
+}
 # Speech recognition for Indian languages: Sarvam saaras:v3 (with Bolna's default speech detection, which is
 # tuned for phone audio). English keeps the template's transcriber (Deepgram).
 INDIAN_TRANSCRIBER = {"provider": "sarvam", "model": "saaras:v3"}
@@ -189,10 +204,18 @@ def _language_rules(language: str, switch_languages: bool) -> str:
         lines.append("- If the customer mixes languages (Hinglish, Tanglish), follow how they talk.")
     scripts = "; ".join(f"{name}: {script}" for name, script in SCRIPTS.items())
     lines.append(
-        "- Write each reply in the script of the language you are speaking, never in English letters, so the voice "
-        f"pronounces it correctly ({scripts}; English in English letters). Keep common English words people use "
-        "(offer, price, booking, EMI) in English letters. The example words below are shown in English letters "
-        "only for reference; say them in the language's own script.")
+        f"- Write the {'Indian-language' if switch_languages or language not in SCRIPTS else language} words of each "
+        f"reply in that language's own script so the voice pronounces them correctly ({scripts}).")
+    lines.append(
+        "- Talk like an urban Indian on the phone: mix in the English words people normally use, and write those "
+        "English words in English letters so they are spoken as English. Never spell an English word in Tamil, "
+        "Hindi or any other script: write \"sir\", not \"சார்\" or \"सर\"; \"madam\", not \"மேடம்\"; and the "
+        f"same for {ENGLISH_WORDS}.")
+    example = MIXED_EXAMPLES.get(language)
+    if example:
+        lines.append(f"- For example, in {language}: \"{example}\"")
+    lines.append("- The style example words further below are shown in English letters only for reference; say "
+                 "them in the language's own script.")
     return "\n".join(lines)
 
 
