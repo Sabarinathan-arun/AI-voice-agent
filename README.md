@@ -95,7 +95,6 @@ and sales script, different voice. Both are Sarvam `bulbul:v3` voices, which spe
 - **Call handling** (`app/bolna_agent_template.json`): voicemail detection off (it hung up on real people),
   no background "hmm"s, a customer's turn ends after a 0.5 s pause (English),
   hang up after 20 s of silence, calls up to 10 minutes.
-  The voice starts after the first ~80 characters of the reply (`buffer_size`), so answers begin quickly.
 - **Language switching:** one Sarvam `saaras:v3` transcriber in auto-detect mode (language `unknown`)
   recognises whichever language the customer speaks; after each reply Bolna points the Sarvam voice at that
   language, and the AI answers in it. The call starts in the campaign's language. (Bolna's per-language

@@ -28,7 +28,7 @@
               "model": "eleven_turbo_v2_5"
             },
             "stream": true,
-            "buffer_size": 80,
+            "buffer_size": 250,
             "audio_format": "wav"
           },
           "transcriber": {
