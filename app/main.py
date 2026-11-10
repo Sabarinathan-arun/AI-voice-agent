@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator
@@ -158,25 +158,49 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, auth
 
     # --- pages -----------------------------------------------------------------
 
+    base = settings.app_base_url
+    public_pages = ("/", "/login")  # what search engines may index; the rest needs an account
+
+    def page(name: str, path: str) -> HTMLResponse:
+        """A page, with its canonical URL; pages behind a login are kept out of search results."""
+        html = (STATIC / name).read_text(encoding="utf-8")
+        if path in public_pages:
+            html = html.replace("</title>", f'</title>\n  <link rel="canonical" href="{base}{path}">', 1)
+            return HTMLResponse(html)
+        return HTMLResponse(html, headers={"X-Robots-Tag": "noindex"})
+
     @app.get("/", include_in_schema=False)
     def index():
-        return FileResponse(STATIC / "index.html")
+        return page("index.html", "/")
 
     @app.get("/login", include_in_schema=False)
     def login_page():
-        return FileResponse(STATIC / "login.html")
+        return page("login.html", "/login")
 
     @app.get("/reset-password", include_in_schema=False)
     def reset_password_page():
-        return FileResponse(STATIC / "reset-password.html")
+        return page("reset-password.html", "/reset-password")
 
     @app.get("/dashboard", include_in_schema=False)
     def dashboard_page():
-        return FileResponse(STATIC / "dashboard.html")
+        return page("dashboard.html", "/dashboard")
 
     @app.get("/campaign", include_in_schema=False)
     def campaign_page():
-        return FileResponse(STATIC / "campaign.html")
+        return page("campaign.html", "/campaign")
+
+    @app.get("/robots.txt", include_in_schema=False)
+    def robots():
+        # Everything a visitor can open may be crawled; only the API is off limits. Private pages carry noindex
+        # instead of a Disallow, so Google can read that and never reports them as "Blocked by robots.txt".
+        return PlainTextResponse(f"User-agent: *\nAllow: /\nDisallow: /api/\n\nSitemap: {base}/sitemap.xml\n")
+
+    @app.get("/sitemap.xml", include_in_schema=False)
+    def sitemap():
+        urls = "".join(f"  <url><loc>{base}{path}</loc></url>\n" for path in public_pages)
+        return Response('<?xml version="1.0" encoding="UTF-8"?>\n'
+                        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+                        f"{urls}</urlset>\n", media_type="application/xml")
 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
 

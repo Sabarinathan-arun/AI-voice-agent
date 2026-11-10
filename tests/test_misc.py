@@ -436,3 +436,18 @@ def test_formal_words_are_swapped_for_the_english_ones_people_say():
         native, english = next(iter(swaps.items()))
         assert f'"{native}" -> "{english}"' in switching
 
+
+
+def test_search_engines_can_crawl_public_pages(client, settings):
+    robots = client.get("/robots.txt")
+    assert robots.status_code == 200
+    assert "Allow: /\n" in robots.text and "Disallow: /api/" in robots.text
+    assert "Disallow: /\n" not in robots.text
+    assert f"Sitemap: {settings.app_base_url}/sitemap.xml" in robots.text
+    sitemap = client.get("/sitemap.xml")
+    assert sitemap.headers["content-type"].startswith("application/xml")
+    assert f"<loc>{settings.app_base_url}/</loc>" in sitemap.text
+    home = client.get("/")
+    assert f'<link rel="canonical" href="{settings.app_base_url}/">' in home.text
+    assert "noindex" not in home.text.lower() and "x-robots-tag" not in home.headers
+    assert client.get("/dashboard").headers["x-robots-tag"] == "noindex"
