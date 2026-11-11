@@ -69,3 +69,21 @@ def test_extra_columns_become_details():
                                     {"key": "lead_2024_spend", "label": "2024 spend"}]
     assert result.leads[0]["details"] == {"company": "Acme", "last_purchase": "Inverter",
                                           "last_purchase_2": "Panels", "lead_2024_spend": "1200"}
+
+
+def test_columns_found_in_any_order_and_not_confused_by_similar_headings():
+    from app.leads import parse_leads
+    cases = {
+        "Company Name,Name,Phone": "Name",
+        "Phone,City,Name": "Name",
+        "Lead Source,Customer Name,Account Number,Mobile": "Customer Name",
+        "Company,Contact Name,Contact Number,Address": "Contact Name",
+    }
+    for header, name_heading in cases.items():
+        cols = header.split(",")
+        row = ["9876543210" if c in ("Phone", "Mobile", "Contact Number") else "12345" if c == "Account Number"
+               else f"v-{c}" for c in cols]
+        result = parse_leads("a.csv", f"{header}\n{','.join(row)}".encode(), "91", 10)
+        lead = result.leads[0]
+        assert lead["name"] == f"v-{name_heading}" and lead["phone"] == "+919876543210", header
+        assert name_heading not in [f["label"] for f in result.detail_fields]

@@ -9,6 +9,9 @@ from openpyxl import load_workbook
 
 NAME_HEADERS = ("name", "customer", "lead", "contact name", "full name")
 PHONE_HEADERS = ("phone", "mobile", "number", "contact", "cell", "whatsapp", "tel")
+# A heading with one of these words is about something else, e.g. "Company Name", "Lead Source", "Account Number".
+NOT_A_PERSON = ("company", "business", "firm", "shop", "store", "organisation", "organization", "brand", "source",
+                "status", "id", "father", "product", "city", "area", "address", "email")
 
 
 class LeadFileError(ValueError):
@@ -90,11 +93,22 @@ def _rows_from_csv(content: bytes) -> list[list]:
     return [row for row in csv.reader(io.StringIO(text))]
 
 
-def _find_column(header: list[str], candidates: tuple[str, ...]) -> int | None:
-    for i, cell in enumerate(header):
-        if any(c in cell for c in candidates):
-            return i
-    return None
+def _find_column(header: list[str], candidates: tuple[str, ...], skip: tuple[str, ...] = ()) -> list[int]:
+    """Columns whose heading matches, in column order: exact headings ("Phone") first, then partial ones."""
+    exact = [i for i, cell in enumerate(header) if cell in candidates]
+    partial = [i for i, cell in enumerate(header) if i not in exact and any(c in cell for c in candidates)
+               and not set(re.findall(r"[a-z]+", cell)) & set(skip)]
+    return exact + partial
+
+
+def _pick_phone_column(columns: list[int], rows: list[list], default_country_code: str) -> int | None:
+    """Of the columns headed like a phone number, the one whose cells most often are phone numbers."""
+    sample = rows[:50]
+
+    def phones(i: int) -> int:
+        return sum(1 for r in sample if i < len(r) and normalize_phone(r[i], default_country_code))
+    best = max(columns, key=lambda i: (phones(i), -columns.index(i)), default=None)
+    return best if best is None or phones(best) else (columns[0] if columns else None)
 
 
 def parse_leads(filename: str, content: bytes, default_country_code: str, max_leads: int) -> ParseResult:
@@ -112,8 +126,9 @@ def parse_leads(filename: str, content: bytes, default_country_code: str, max_le
 
     raw_header = [str(c or "").strip() for c in rows[0]]
     header = [h.lower() for h in raw_header]
-    phone_col = _find_column(header, PHONE_HEADERS)
-    name_col = _find_column([h if i != phone_col else "" for i, h in enumerate(header)], NAME_HEADERS)
+    phone_col = _pick_phone_column(_find_column(header, PHONE_HEADERS), rows[1:], default_country_code)
+    name_col = next(iter(_find_column([h if i != phone_col else "" for i, h in enumerate(header)], NAME_HEADERS,
+                                      skip=NOT_A_PERSON)), None)
     if phone_col is not None:
         data_rows, first_row_number = rows[1:], 2
         if name_col is None:
