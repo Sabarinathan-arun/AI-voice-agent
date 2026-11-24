@@ -8,7 +8,8 @@
        sign-in page isn't in its Redirect URLs. Hand the sign-in over to /login, which finishes it. */
     if (/(^|[#&])(access_token|error_description)=/.test(location.hash) ||
         /[?&](code|error_description)=/.test(location.search)) {
-      location.replace('/login' + location.search + location.hash);
+      const recovery = /(^|[#&])type=recovery(&|$)/.test(location.hash);  // a password-reset link
+      location.replace((recovery ? '/reset-password' : '/login') + location.search + location.hash);
     }
   </script>
   <title>Intuvora — AI sales calls for every lead</title>

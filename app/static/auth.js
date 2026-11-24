@@ -19,11 +19,13 @@ function linkError() {
   return description ? description.replace(/\+/g, ' ') : '';
 }
 
-async function supabaseClient() {
+/* storageKey keeps pages apart: the reset page's sign-in is not seen (and finished) by a sign-in page open in
+   another tab, which would otherwise log the person in and leave the reset page with "Auth session missing". */
+async function supabaseClient(storageKey = 'intuvora-auth') {
   const cfg = await (await fetch('/api/config')).json();
   if (!cfg.supabase_url || !cfg.supabase_anon_key) throw new Error('Sign-in is not configured yet (SUPABASE_URL / SUPABASE_ANON_KEY).');
   const client = window.supabase.createClient(cfg.supabase_url, cfg.supabase_anon_key, {
-    auth: {flowType: 'implicit', detectSessionInUrl: true, persistSession: true, autoRefreshToken: false},
+    auth: {flowType: 'implicit', detectSessionInUrl: true, persistSession: true, autoRefreshToken: false, storageKey},
   });
   return {client, cfg};
 }

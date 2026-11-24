@@ -72,6 +72,10 @@
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script>
+  // A password-reset link that arrived here (Supabase fell back to this address) belongs on the reset page.
+  if (/(^|[#&])type=recovery(&|$)/.test(location.hash)) location.replace('/reset-password' + location.hash);
+</script>
 <script src="/static/auth.js"></script>
 <script>
 let mode = 'signin', sb = null;
