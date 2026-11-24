@@ -12,9 +12,10 @@ import secrets
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator
@@ -92,6 +93,20 @@ def create_app(settings: Settings | None = None, bolna=None, payments=None, auth
         database.close()
 
     app = FastAPI(title="Intuvora AI Sales Agent", lifespan=lifespan)
+
+    base_host = urlsplit(settings.app_base_url).netloc
+    local = urlsplit(settings.app_base_url).hostname in ("localhost", "127.0.0.1")
+
+    @app.middleware("http")
+    async def one_address(request: Request, call_next):
+        """Pages opened on another address of this app (the old onrender.com one, or without www) move to
+        APP_BASE_URL, so sign-in cookies and search results all belong to one site. The API is left alone."""
+        host = request.headers.get("host", "")
+        if (not local and host and host != base_host and request.method in ("GET", "HEAD")
+                and not request.url.path.startswith("/api/")):
+            target = settings.app_base_url + request.url.path + (f"?{request.url.query}" if request.url.query else "")
+            return RedirectResponse(target, status_code=301)
+        return await call_next(request)
 
     @app.middleware("http")
     async def log_timing(request: Request, call_next):

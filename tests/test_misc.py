@@ -451,3 +451,11 @@ def test_search_engines_can_crawl_public_pages(client, settings):
     assert f'<link rel="canonical" href="{settings.app_base_url}/">' in home.text
     assert "noindex" not in home.text.lower() and "x-robots-tag" not in home.headers
     assert client.get("/dashboard").headers["x-robots-tag"] == "noindex"
+
+
+def test_other_addresses_move_to_the_main_one_and_homepage_hands_sign_in_to_login(client):
+    old = client.get("/?x=1", headers={"host": "old.onrender.com"}, follow_redirects=False)
+    assert old.status_code == 301 and old.headers["location"] == "http://testserver/?x=1"
+    assert client.get("/api/config", headers={"host": "old.onrender.com"}).status_code == 200  # API untouched
+    assert client.get("/", follow_redirects=False).status_code == 200
+    assert "location.replace('/login' + location.search + location.hash)" in client.get("/").text

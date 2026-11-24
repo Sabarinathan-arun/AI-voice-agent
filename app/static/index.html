@@ -3,6 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script>
+    /* Back from Google (or an email link) on the homepage: Supabase sends people to the Site URL when the
+       sign-in page isn't in its Redirect URLs. Hand the sign-in over to /login, which finishes it. */
+    if (/(^|[#&])(access_token|error_description)=/.test(location.hash) ||
+        /[?&](code|error_description)=/.test(location.search)) {
+      location.replace('/login' + location.search + location.hash);
+    }
+  </script>
   <title>Intuvora — AI sales calls for every lead</title>
   <meta name="description" content="Intuvora calls every lead for you with an AI sales agent that speaks your customers' language. Upload an Excel sheet, describe your offer, and download the results.">
   <link rel="icon" href="/static/favicon.ico">
